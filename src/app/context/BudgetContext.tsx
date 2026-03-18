@@ -132,6 +132,9 @@ const normalizeAccount = (account: Account, settingsCurrency: string): Account =
     dueDay,
     pensionFundValue: account.pensionFundValue ?? 0,
     governmentContribution: account.governmentContribution ?? 0,
+    commodityName: account.commodityName ?? '',
+    commodityUnits: account.commodityUnits ?? 0,
+    commodityValuationMode: account.commodityValuationMode ?? 'manual',
   };
 };
 
@@ -177,28 +180,52 @@ const normalizeTransaction = (transaction: Transaction): Transaction => {
   };
 };
 
-const normalizeFundHoldingMeta = (meta: FundHoldingMeta): FundHoldingMeta => ({
-  ...meta,
-  currentPrice: meta.currentPrice ?? 0,
-  withholdingTaxRate: meta.withholdingTaxRate ?? 0,
-  transactionFeeRate: meta.transactionFeeRate ?? 0,
-  priceMode: meta.priceMode ?? 'manual',
-  lastUpdated: meta.lastUpdated ?? undefined,
-});
+const normalizeFundHoldingMeta = (meta: FundHoldingMeta): FundHoldingMeta => {
+  const currentPrice = meta.currentPrice ?? 0;
+  const baselinePrice = Number.isFinite(meta.baselinePrice)
+    ? meta.baselinePrice
+    : (Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : undefined);
+  return {
+    ...meta,
+    currentPrice,
+    withholdingTaxRate: meta.withholdingTaxRate ?? 0,
+    transactionFeeRate: meta.transactionFeeRate ?? 0,
+    priceMode: meta.priceMode ?? 'manual',
+    lastUpdated: meta.lastUpdated ?? undefined,
+    baselinePrice,
+    baselineAt: meta.baselineAt ?? (baselinePrice ? meta.lastUpdated ?? new Date().toISOString() : undefined),
+  };
+};
 
-const normalizeFxRate = (rate: FxRate): FxRate => ({
-  pair: rate.pair,
-  rate: Number.isFinite(rate.rate) ? rate.rate : 0,
-  mode: rate.mode ?? 'manual',
-  updatedAt: rate.updatedAt ?? undefined,
-});
+const normalizeFxRate = (rate: FxRate): FxRate => {
+  const normalizedRate = Number.isFinite(rate.rate) ? rate.rate : 0;
+  const baselineRate = Number.isFinite(rate.baselineRate)
+    ? rate.baselineRate
+    : (normalizedRate > 0 ? normalizedRate : undefined);
+  return {
+    pair: rate.pair,
+    rate: normalizedRate,
+    mode: rate.mode ?? 'manual',
+    updatedAt: rate.updatedAt ?? undefined,
+    baselineRate,
+    baselineAt: rate.baselineAt ?? (baselineRate ? rate.updatedAt ?? new Date().toISOString() : undefined),
+  };
+};
 
-const normalizeCommodityPrice = (item: CommodityPrice): CommodityPrice => ({
-  commodity: item.commodity,
-  price: Number.isFinite(item.price) ? item.price : 0,
-  mode: item.mode ?? 'manual',
-  updatedAt: item.updatedAt ?? undefined,
-});
+const normalizeCommodityPrice = (item: CommodityPrice): CommodityPrice => {
+  const price = Number.isFinite(item.price) ? item.price : 0;
+  const baselinePrice = Number.isFinite(item.baselinePrice)
+    ? item.baselinePrice
+    : (price > 0 ? price : undefined);
+  return {
+    commodity: item.commodity,
+    price,
+    mode: item.mode ?? 'manual',
+    updatedAt: item.updatedAt ?? undefined,
+    baselinePrice,
+    baselineAt: item.baselineAt ?? (baselinePrice ? item.updatedAt ?? new Date().toISOString() : undefined),
+  };
+};
 
 const normalizeMarketData = (marketData?: MarketDataState): MarketDataState => ({
   fxRates: Array.isArray(marketData?.fxRates) ? marketData!.fxRates.map(normalizeFxRate) : [],
@@ -598,11 +625,18 @@ export const BudgetProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const upsertFxRate = (pair: string, updates: Partial<FxRate>) => {
     setState(prev => {
       const existing = prev.marketData.fxRates.find(item => item.pair === pair);
+      const incomingRate = Number.isFinite(updates.rate)
+        ? (updates.rate as number)
+        : existing?.rate;
+      const shouldSetBaseline = !existing?.baselineRate && Number.isFinite(incomingRate) && (incomingRate as number) > 0;
+      const baselineUpdates = shouldSetBaseline
+        ? { baselineRate: incomingRate as number, baselineAt: updates.updatedAt ?? new Date().toISOString() }
+        : {};
       const updated = existing
         ? prev.marketData.fxRates.map(item =>
-            item.pair === pair ? normalizeFxRate({ ...item, ...updates, pair }) : item
+            item.pair === pair ? normalizeFxRate({ ...item, ...updates, ...baselineUpdates, pair }) : item
           )
-        : [...prev.marketData.fxRates, normalizeFxRate({ pair, rate: 0, mode: 'manual', ...updates })];
+        : [...prev.marketData.fxRates, normalizeFxRate({ pair, rate: 0, mode: 'manual', ...updates, ...baselineUpdates })];
       return { ...prev, marketData: { ...prev.marketData, fxRates: updated } };
     });
   };
@@ -610,11 +644,18 @@ export const BudgetProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const upsertCommodityPrice = (commodity: string, updates: Partial<CommodityPrice>) => {
     setState(prev => {
       const existing = prev.marketData.commodities.find(item => item.commodity === commodity);
+      const incomingPrice = Number.isFinite(updates.price)
+        ? (updates.price as number)
+        : existing?.price;
+      const shouldSetBaseline = !existing?.baselinePrice && Number.isFinite(incomingPrice) && (incomingPrice as number) > 0;
+      const baselineUpdates = shouldSetBaseline
+        ? { baselinePrice: incomingPrice as number, baselineAt: updates.updatedAt ?? new Date().toISOString() }
+        : {};
       const updated = existing
         ? prev.marketData.commodities.map(item =>
-            item.commodity === commodity ? normalizeCommodityPrice({ ...item, ...updates, commodity }) : item
+            item.commodity === commodity ? normalizeCommodityPrice({ ...item, ...updates, ...baselineUpdates, commodity }) : item
           )
-        : [...prev.marketData.commodities, normalizeCommodityPrice({ commodity, price: 0, mode: 'manual', ...updates })];
+        : [...prev.marketData.commodities, normalizeCommodityPrice({ commodity, price: 0, mode: 'manual', ...updates, ...baselineUpdates })];
       return { ...prev, marketData: { ...prev.marketData, commodities: updated } };
     });
   };
@@ -622,11 +663,18 @@ export const BudgetProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const upsertFundHoldingMeta = (fund: string, updates: Partial<FundHoldingMeta>) => {
     setState(prev => {
       const existing = prev.fundHoldingsMeta.find(meta => meta.fund === fund);
+      const incomingPrice = Number.isFinite(updates.currentPrice)
+        ? (updates.currentPrice as number)
+        : existing?.currentPrice;
+      const shouldSetBaseline = !existing?.baselinePrice && Number.isFinite(incomingPrice) && (incomingPrice as number) > 0;
+      const baselineUpdates = shouldSetBaseline
+        ? { baselinePrice: incomingPrice as number, baselineAt: updates.lastUpdated ?? new Date().toISOString() }
+        : {};
       const updated = existing
         ? prev.fundHoldingsMeta.map(meta =>
-            meta.fund === fund ? normalizeFundHoldingMeta({ ...meta, ...updates }) : meta
+            meta.fund === fund ? normalizeFundHoldingMeta({ ...meta, ...updates, ...baselineUpdates }) : meta
           )
-        : [...prev.fundHoldingsMeta, normalizeFundHoldingMeta({ fund, currentPrice: 0, withholdingTaxRate: 0, ...updates })];
+        : [...prev.fundHoldingsMeta, normalizeFundHoldingMeta({ fund, currentPrice: 0, withholdingTaxRate: 0, ...updates, ...baselineUpdates })];
       return { ...prev, fundHoldingsMeta: updated };
     });
   };

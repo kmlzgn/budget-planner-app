@@ -20,6 +20,7 @@ const accountTypes: { value: AccountType; label: string; isAsset: boolean }[] = 
   { value: 'checking', label: 'Checking Account', isAsset: true },
   { value: 'savings', label: 'Savings Account', isAsset: true },
   { value: 'blocked', label: 'Blocked Account', isAsset: true },
+  { value: 'commodities', label: 'Commodities', isAsset: true },
   { value: 'investment', label: 'Investment Account', isAsset: true },
   { value: 'brokerage', label: 'Brokerage Account', isAsset: true },
   { value: 'retirement', label: 'Retirement Account', isAsset: true },
@@ -63,6 +64,9 @@ export function AccountsWealth() {
     dueDay: 15,
     pensionFundValue: 0,
     governmentContribution: 0,
+    commodityName: 'Gold',
+    commodityUnits: 0,
+    commodityValuationMode: 'manual',
   }));
 
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
@@ -91,11 +95,29 @@ export function AccountsWealth() {
     if (accountFormData.name && accountFormData.type !== undefined) {
       const isCreditCard = accountFormData.type === 'credit-card';
       const isPension = accountFormData.type === 'pension';
+      const isCommodity = accountFormData.type === 'commodities';
       const statementDay = isCreditCard ? clampDay(accountFormData.statementDay, 1) : undefined;
       const dueDay = isCreditCard ? clampDay(accountFormData.dueDay, Math.min((statementDay ?? 1) + 10, 28)) : undefined;
       const pensionFundValue = accountFormData.pensionFundValue ?? 0;
       const governmentContribution = accountFormData.governmentContribution ?? 0;
-      const derivedBalance = isPension ? pensionFundValue + governmentContribution : (accountFormData.currentBalance ?? 0);
+      const commodityName = accountFormData.commodityName ?? '';
+      const commodityUnits = accountFormData.commodityUnits ?? 0;
+      const commodityValuationMode = accountFormData.commodityValuationMode ?? 'manual';
+      const commodityPrice = isCommodity
+        ? getCommodityMarketPrice({
+            ...accountFormData,
+            name: accountFormData.name,
+            commodityName,
+            commodityUnits,
+            commodityValuationMode,
+          } as Account)
+        : 0;
+      const commodityValue = commodityValuationMode === 'auto' ? commodityUnits * commodityPrice : (accountFormData.currentBalance ?? 0);
+      const derivedBalance = isPension
+        ? pensionFundValue + governmentContribution
+        : isCommodity
+          ? commodityValue
+          : (accountFormData.currentBalance ?? 0);
       if (editingAccountId) {
         updateAccount(editingAccountId, {
           ...accountFormData,
@@ -103,6 +125,9 @@ export function AccountsWealth() {
           dueDay,
           pensionFundValue,
           governmentContribution,
+          commodityName,
+          commodityUnits,
+          commodityValuationMode,
           currentBalance: derivedBalance,
         });
         setEditingAccountId(null);
@@ -120,6 +145,9 @@ export function AccountsWealth() {
           dueDay,
           pensionFundValue,
           governmentContribution,
+          commodityName,
+          commodityUnits,
+          commodityValuationMode,
           currentBalance: derivedBalance,
         } as Account);
       }
@@ -138,14 +166,17 @@ export function AccountsWealth() {
       currency: state.settings.currency,
       isForeignCurrency: false,
       exchangeRate: 1,
-      notes: '',
-      owner: '',
-      institution: '',
-      statementDay: 1,
-      dueDay: 15,
-      pensionFundValue: 0,
-      governmentContribution: 0,
-    });
+    notes: '',
+    owner: '',
+    institution: '',
+    statementDay: 1,
+    dueDay: 15,
+    pensionFundValue: 0,
+    governmentContribution: 0,
+    commodityName: 'Gold',
+    commodityUnits: 0,
+    commodityValuationMode: 'manual',
+  });
     setEditingAccountId(null);
   };
 
@@ -319,11 +350,51 @@ export function AccountsWealth() {
     if (Number.isFinite(inverse) && (inverse as number) > 0) return 1 / (inverse as number);
     return 1;
   };
+  const getMarketFxBaselineRate = (currency: string) => {
+    if (!currency || currency === state.settings.currency) return 1;
+    const normalizePair = (pair: string) => pair.replace(/\s+/g, '').toUpperCase();
+    const directPair = normalizePair(`${currency}/${state.settings.currency}`);
+    const inversePair = normalizePair(`${state.settings.currency}/${currency}`);
+    const direct = state.marketData.fxRates.find(rate => normalizePair(rate.pair) === directPair)?.baselineRate;
+    if (Number.isFinite(direct) && (direct as number) > 0) return direct as number;
+    const inverse = state.marketData.fxRates.find(rate => normalizePair(rate.pair) === inversePair)?.baselineRate;
+    if (Number.isFinite(inverse) && (inverse as number) > 0) return 1 / (inverse as number);
+    return 1;
+  };
   const resolveAccountFxRate = (account: Account) => {
     if (!account.currency || account.currency === state.settings.currency) return 1;
     const exchangeRate = account.exchangeRate;
     if (Number.isFinite(exchangeRate) && (exchangeRate as number) > 0) return exchangeRate as number;
     return getMarketFxRate(account.currency);
+  };
+  const resolveAccountBaselineFxRate = (account: Account) => {
+    if (!account.currency || account.currency === state.settings.currency) return 1;
+    const exchangeRate = account.exchangeRate;
+    if (Number.isFinite(exchangeRate) && (exchangeRate as number) > 0 && exchangeRate !== 1) {
+      return exchangeRate as number;
+    }
+    const baseline = getMarketFxBaselineRate(account.currency);
+    return Number.isFinite(baseline) && (baseline as number) > 0 ? (baseline as number) : getMarketFxRate(account.currency);
+  };
+  const getCommodityMarketPrice = (account: Account) => {
+    const fallbackName = account.commodityName?.trim()
+      || (account.name.toLowerCase().includes('gold') || account.name.toLowerCase().includes('altin') ? 'Gold' : '');
+    if (!fallbackName) return 0;
+    const match = state.marketData.commodities.find(item => item.commodity.toLowerCase() === fallbackName.toLowerCase());
+    return match?.price ?? 0;
+  };
+  const getCommodityBaselinePrice = (account: Account) => {
+    const fallbackName = account.commodityName?.trim()
+      || (account.name.toLowerCase().includes('gold') || account.name.toLowerCase().includes('altin') ? 'Gold' : '');
+    if (!fallbackName) return 0;
+    const match = state.marketData.commodities.find(item => item.commodity.toLowerCase() === fallbackName.toLowerCase());
+    return match?.baselinePrice ?? 0;
+  };
+  const getCommodityBaselineValue = (account: Account) => {
+    const units = account.commodityUnits ?? 0;
+    const baselinePrice = getCommodityBaselinePrice(account);
+    if (baselinePrice > 0) return units * baselinePrice;
+    return account.openingBalance ?? 0;
   };
   const toBase = (value: number, account: Account) => {
     if (account.currency && account.currency !== state.settings.currency) {
@@ -331,11 +402,30 @@ export function AccountsWealth() {
     }
     return value;
   };
-  const getAccountLocalValue = (account: Account) =>
-    account.type === 'pension'
-      ? (account.pensionFundValue ?? 0) + (account.governmentContribution ?? 0)
-      : (accountBalances.get(account.id) ?? account.currentBalance);
+  const toBaselineBase = (value: number, account: Account) => {
+    if (account.currency && account.currency !== state.settings.currency) {
+      return value * resolveAccountBaselineFxRate(account);
+    }
+    return value;
+  };
+  const getAccountLocalValue = (account: Account) => {
+    if (account.type === 'commodities' && account.commodityValuationMode === 'auto') {
+      const units = account.commodityUnits ?? 0;
+      const price = getCommodityMarketPrice(account);
+      return units * price;
+    }
+    if (account.type === 'pension') {
+      return (account.pensionFundValue ?? 0) + (account.governmentContribution ?? 0);
+    }
+    return accountBalances.get(account.id) ?? account.currentBalance;
+  };
   const getAccountValue = (account: Account) => toBase(getAccountLocalValue(account), account);
+  const getAccountBaselineValue = (account: Account) => {
+    if (account.type === 'commodities') {
+      return toBaselineBase(getCommodityBaselineValue(account), account);
+    }
+    return toBaselineBase(account.openingBalance ?? 0, account);
+  };
 
   const applyView = (value: number, date: string = todayStr) => {
     if (wealthViewMode === 'nominal') return { value, adjusted: true };
@@ -369,6 +459,15 @@ export function AccountsWealth() {
     ? (adjustedFundCurrent.value - adjustedFundInvested.value) / adjustedFundInvested.value
     : 0;
   const pensionTotal = (accountFormData.pensionFundValue ?? 0) + (accountFormData.governmentContribution ?? 0);
+  const commodityPreviewValue = accountFormData.type === 'commodities' && accountFormData.commodityValuationMode === 'auto'
+    ? (accountFormData.commodityUnits ?? 0) * getCommodityMarketPrice({
+        ...accountFormData,
+        name: accountFormData.name || '',
+        commodityName: accountFormData.commodityName ?? '',
+        commodityUnits: accountFormData.commodityUnits ?? 0,
+        commodityValuationMode: accountFormData.commodityValuationMode ?? 'manual',
+      } as Account)
+    : (accountFormData.currentBalance ?? 0);
 
   const handleCaptureSnapshot = () => {
     addWealthSnapshot({
@@ -499,6 +598,7 @@ export function AccountsWealth() {
     activeDeposits,
     state.settings.currency,
     state.marketData.fxRates,
+    state.marketData.commodities,
     ({ account, deposit }) => account?.institution?.trim() || deposit?.institution?.trim() || ''
   );
 
@@ -510,6 +610,7 @@ export function AccountsWealth() {
     activeDeposits,
     state.settings.currency,
     state.marketData.fxRates,
+    state.marketData.commodities,
     ({ account, deposit }) => account?.owner?.trim() || deposit?.owner?.trim() || ''
   );
 
@@ -696,7 +797,9 @@ export function AccountsWealth() {
               assetAccounts.map(account => {
                 const localBalance = getAccountLocalValue(account);
                 const derivedBalance = getAccountValue(account);
-                const change = derivedBalance - toBase(account.openingBalance, account);
+                  const baselineValue = getAccountBaselineValue(account);
+                  const change = derivedBalance - baselineValue;
+                  const changePct = baselineValue > 0 ? (change / baselineValue) * 100 : 0;
                 return (
                   <div key={account.id} className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
                     <div className="flex items-start justify-between mb-2">
@@ -715,6 +818,11 @@ export function AccountsWealth() {
                         )}
                         {account.currency && (
                           <div className="text-xs text-gray-500">{t('Account Currency', language)}: {account.currency}</div>
+                        )}
+                        {account.type === 'commodities' && (
+                          <div className="text-xs text-gray-500">
+                            {t('Commodity', language)}: {account.commodityName || account.name} • {t('Units', language)}: {account.commodityUnits ?? 0} • {t('Mode', language)}: {t(account.commodityValuationMode === 'auto' ? 'Auto Fetch' : 'Manual', language)}
+                          </div>
                         )}
                         {account.type === 'pension' && (
                           <div className="text-xs text-gray-500">
@@ -748,11 +856,16 @@ export function AccountsWealth() {
                       </div>
                       <div className={`text-sm ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {change >= 0 ? '+' : ''}{formatCurrency(change, state.settings.currency, locale)}
+                        {baselineValue > 0 && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            ({changePct.toFixed(1)}%)
+                          </span>
+                        )}
                       </div>
                     </div>
                     {account.isForeignCurrency && account.currency && (
                       <div className="mt-1 text-xs text-gray-500">
-                        {formatLocalAmount(localBalance, account.currency)} • {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)}
+                        {formatLocalAmount(localBalance, account.currency)} • {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)} → {formatCurrency(derivedBalance, state.settings.currency, locale)}
                       </div>
                     )}
                   </div>
@@ -826,7 +939,7 @@ export function AccountsWealth() {
                           </div>
                           {account.isForeignCurrency && account.currency && !cardSummary && (
                             <div className="mt-1 text-xs text-gray-500">
-                            {formatLocalAmount(Math.abs(localBalance), account.currency)} • {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)}
+                            {formatLocalAmount(Math.abs(localBalance), account.currency)} ? {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)} ? {formatCurrency(Math.abs(baseBalance), state.settings.currency, locale)}
                             </div>
                           )}
                         </div>
@@ -1620,6 +1733,8 @@ export function AccountsWealth() {
                     isAsset: typeMeta?.isAsset ?? accountFormData.isAsset,
                     statementDay: isCreditCard ? (accountFormData.statementDay ?? 1) : undefined,
                     dueDay: isCreditCard ? (accountFormData.dueDay ?? 15) : undefined,
+                    commodityName: type === 'commodities' ? (accountFormData.commodityName ?? 'Gold') : accountFormData.commodityName,
+                    commodityValuationMode: type === 'commodities' ? (accountFormData.commodityValuationMode ?? 'manual') : accountFormData.commodityValuationMode,
                   });
                 }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
@@ -1670,9 +1785,15 @@ export function AccountsWealth() {
               <label className="block text-sm font-medium text-gray-700 mb-1">{t('Current Balance', language)}</label>
               <input
                 type="number"
-                value={accountFormData.type === 'pension' ? pensionTotal : (accountFormData.currentBalance ?? '')}
+                value={
+                  accountFormData.type === 'pension'
+                    ? pensionTotal
+                    : (accountFormData.type === 'commodities' && accountFormData.commodityValuationMode === 'auto')
+                      ? commodityPreviewValue
+                      : (accountFormData.currentBalance ?? '')
+                }
                 onChange={(e) => setAccountFormData({ ...accountFormData, currentBalance: parseFloat(e.target.value) || 0 })}
-                disabled={accountFormData.type === 'pension'}
+                disabled={accountFormData.type === 'pension' || (accountFormData.type === 'commodities' && accountFormData.commodityValuationMode === 'auto')}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             </div>
@@ -1695,6 +1816,50 @@ export function AccountsWealth() {
                     onChange={(e) => setAccountFormData({ ...accountFormData, governmentContribution: parseFloat(e.target.value) || 0 })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   />
+                </div>
+              </>
+            )}
+            {accountFormData.type === 'commodities' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Commodity', language)}</label>
+                  <input
+                    type="text"
+                    value={accountFormData.commodityName || ''}
+                    onChange={(e) => setAccountFormData({ ...accountFormData, commodityName: e.target.value })}
+                    placeholder="Gold"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Units', language)}</label>
+                  <input
+                    type="number"
+                    value={accountFormData.commodityUnits ?? ''}
+                    onChange={(e) => setAccountFormData({ ...accountFormData, commodityUnits: parseFloat(e.target.value) || 0 })}
+                    step="0.0001"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Mode', language)}</label>
+                  <select
+                    value={accountFormData.commodityValuationMode ?? 'manual'}
+                    onChange={(e) => setAccountFormData({ ...accountFormData, commodityValuationMode: e.target.value as 'manual' | 'auto' })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  >
+                    <option value="manual">{t('Manual', language)}</option>
+                    <option value="auto">{t('Auto Fetch', language)}</option>
+                  </select>
+                </div>
+                <div className="md:col-span-2 text-xs text-gray-500">
+                  {t('Current Price', language)}: {formatCurrency(getCommodityMarketPrice({
+                    ...accountFormData,
+                    name: accountFormData.name || '',
+                    commodityName: accountFormData.commodityName ?? '',
+                    commodityUnits: accountFormData.commodityUnits ?? 0,
+                    commodityValuationMode: accountFormData.commodityValuationMode ?? 'manual',
+                  } as Account), state.settings.currency, locale)}
                 </div>
               </>
             )}

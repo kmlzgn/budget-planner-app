@@ -1,4 +1,4 @@
-import { Account, AccountType, BudgetState, Deposit, FxRate } from '../types';
+import { Account, AccountType, BudgetState, CommodityPrice, Deposit, FxRate } from '../types';
 import { calculateAccountBalancesFromTransactions, calculateNetWorth } from './budgetCalculations';
 import { calculateFundHoldings, FundHolding } from './fundCalculations';
 import { getDepositExpectedValue, getDepositStatus, getDaysUntil } from './wealthCalculations';
@@ -7,9 +7,10 @@ const cashTypes = new Set<AccountType>(['cash', 'checking', 'savings']);
 
 const normalizeName = (name: string) => name.trim().toLowerCase();
 
-const isGoldAccount = (account: Account) => {
+const isCommodityAccount = (account: Account) => {
   const name = normalizeName(account.name);
   return account.isAsset && (
+    account.type === 'commodities' ||
     name.includes('gold') ||
     name.includes('altin') ||
     name.includes('commodity') ||
@@ -85,7 +86,20 @@ export const getWealthTotals = (state: BudgetState, today: Date): WealthTotals =
     }
     return value;
   };
+  const getCommodityPrice = (account: Account) => {
+    const fallbackName = normalizeName(account.name).includes('gold') || normalizeName(account.name).includes('altin')
+      ? 'Gold'
+      : account.commodityName;
+    if (!fallbackName) return 0;
+    const match = state.marketData.commodities.find(item => normalizeName(item.commodity) === normalizeName(fallbackName));
+    return match?.price ?? 0;
+  };
   const getAccountValue = (account: Account) => {
+    if (account.type === 'commodities' && account.commodityValuationMode === 'auto') {
+      const units = account.commodityUnits ?? 0;
+      const price = getCommodityPrice(account);
+      return units * price;
+    }
     const localValue = account.type === 'pension'
       ? (account.pensionFundValue ?? 0) + (account.governmentContribution ?? 0)
       : (accountBalances.get(account.id) ?? account.currentBalance);
@@ -125,10 +139,10 @@ export const getWealthTotals = (state: BudgetState, today: Date): WealthTotals =
   const liabilityAccounts = state.accounts.filter(a => !a.isAsset);
   const debtTotal = state.debts.reduce((sum, debt) => sum + Math.abs(debt.currentBalance || 0), 0);
   const cashTotal = assetAccounts
-    .filter(a => cashTypes.has(a.type) && !isDepositAccount(a) && !isBlockedAccount(a) && !isGoldAccount(a))
+    .filter(a => cashTypes.has(a.type) && !isDepositAccount(a) && !isBlockedAccount(a) && !isCommodityAccount(a))
     .reduce((sum, a) => sum + getAccountValue(a), 0);
   const goldTotal = assetAccounts
-    .filter(a => isGoldAccount(a))
+    .filter(a => isCommodityAccount(a))
     .reduce((sum, a) => sum + getAccountValue(a), 0);
   const blockedAssetsTotal = assetAccounts
     .filter(a => isBlockedAccount(a))
@@ -136,7 +150,7 @@ export const getWealthTotals = (state: BudgetState, today: Date): WealthTotals =
   const otherAssetsTotal = assetAccounts
     .filter(a =>
       !cashTypes.has(a.type) &&
-      !isGoldAccount(a) &&
+      !isCommodityAccount(a) &&
       !isDepositAccount(a) &&
       !isBlockedAccount(a)
     )
@@ -198,6 +212,7 @@ export const buildWealthBreakdown = (
   activeDeposits: Deposit[],
   baseCurrency: string,
   fxRates: FxRate[],
+  commodities: CommodityPrice[],
   getKey: (args: { account?: Account; deposit?: Deposit }) => string
 ) => {
   const getMarketFxRate = (currency: string) => {
@@ -221,7 +236,20 @@ export const buildWealthBreakdown = (
     }
     return value;
   };
+  const getCommodityPrice = (account: Account) => {
+    const fallbackName = normalizeName(account.name).includes('gold') || normalizeName(account.name).includes('altin')
+      ? 'Gold'
+      : account.commodityName;
+    if (!fallbackName) return 0;
+    const match = commodities.find(item => normalizeName(item.commodity) === normalizeName(fallbackName));
+    return match?.price ?? 0;
+  };
   const getAccountValue = (account: Account) => {
+    if (account.type === 'commodities' && account.commodityValuationMode === 'auto') {
+      const units = account.commodityUnits ?? 0;
+      const price = getCommodityPrice(account);
+      return units * price;
+    }
     const localValue = account.type === 'pension'
       ? (account.pensionFundValue ?? 0) + (account.governmentContribution ?? 0)
       : (accountBalances.get(account.id) ?? account.currentBalance);
@@ -263,7 +291,7 @@ export const buildWealthBreakdown = (
     if (isDepositAccount(account)) return;
     const value = getAccountValue(account);
     const key = getKey({ account });
-    if (isGoldAccount(account)) addValue(key, 'gold', value);
+    if (isCommodityAccount(account)) addValue(key, 'gold', value);
     else if (isBlockedAccount(account)) addValue(key, 'blocked', value);
     else if (cashTypes.has(account.type)) addValue(key, 'cash', value);
     else addValue(key, 'otherAssets', value);

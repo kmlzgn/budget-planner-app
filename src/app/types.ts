@@ -11,6 +11,7 @@ export type AccountType =
   | 'credit-card'
   | 'investment'
   | 'blocked'
+  | 'commodities'
   | 'pension'
   | 'life-insurance'
   | 'loan'
@@ -111,6 +112,9 @@ export interface Account {
   dueDay?: number;
   pensionFundValue?: number;
   governmentContribution?: number;
+  commodityName?: string;
+  commodityUnits?: number;
+  commodityValuationMode?: MarketDataMode;
 }
 
 export interface DebtInstallment {
@@ -190,6 +194,8 @@ export interface FundHoldingMeta {
   transactionFeeRate?: number;
   priceMode?: MarketDataMode;
   lastUpdated?: string;
+  baselinePrice?: number;
+  baselineAt?: string;
 }
 
 export interface FxRate {
@@ -197,6 +203,8 @@ export interface FxRate {
   rate: number;
   mode: MarketDataMode;
   updatedAt?: string;
+  baselineRate?: number;
+  baselineAt?: string;
 }
 
 export interface CommodityPrice {
@@ -204,6 +212,8 @@ export interface CommodityPrice {
   price: number;
   mode: MarketDataMode;
   updatedAt?: string;
+  baselinePrice?: number;
+  baselineAt?: string;
 }
 
 export interface MarketDataState {

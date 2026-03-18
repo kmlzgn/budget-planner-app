@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useBudget } from '../context/BudgetContext';
-import { Plus, Trash2, Edit2, Check, Filter, Download, Upload, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, Check, Filter, Download, Upload, X, Repeat } from 'lucide-react';
 import { Deposit, FundTransaction, Transaction } from '../types';
 import { generateId } from '../utils/id';
 import { format, subDays, subMonths, subYears, startOfYear, endOfYear } from 'date-fns';
@@ -43,7 +43,6 @@ export function TransactionLog() {
     addFundTransactions,
     updateFundTransaction,
     deleteFundTransaction,
-    upsertFundHoldingMeta,
     addDeposit,
     addDeposits,
     updateDeposit,
@@ -57,8 +56,11 @@ export function TransactionLog() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fundFileInputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<'transactions' | 'funds' | 'deposits'>('transactions');
+  const [transactionFormOpen, setTransactionFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rowEditData, setRowEditData] = useState<Partial<Transaction> | null>(null);
+  const [isFxManualOverride, setIsFxManualOverride] = useState(false);
+  const [isRowFxManualOverride, setIsRowFxManualOverride] = useState(false);
   const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterAccountId, setFilterAccountId] = useState<string>('all');
@@ -69,6 +71,10 @@ export function TransactionLog() {
   const [datePreset, setDatePreset] = useState<'custom' | 'last7' | 'last15' | 'lastMonth' | 'lastYear' | 'thisYear'>('custom');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [transactionSort, setTransactionSort] = useState<{ key: 'date' | 'description' | 'category' | 'account' | 'owner' | 'amount'; direction: 'asc' | 'desc' }>({
+    key: 'date',
+    direction: 'desc',
+  });
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [duplicateImportRows, setDuplicateImportRows] = useState<Array<ImportRow & { key: string }>>([]);
   const [selectedDuplicateKeys, setSelectedDuplicateKeys] = useState<Set<string>>(new Set());
@@ -100,7 +106,11 @@ export function TransactionLog() {
   const [fundFilterSpender, setFundFilterSpender] = useState('all');
   const [fundCurrentPage, setFundCurrentPage] = useState(1);
   const [fundPageSize, setFundPageSize] = useState(20);
-  const [fundViewMode, setFundViewMode] = useState<'transactions' | 'holdings'>('transactions');
+  const [fundSort, setFundSort] = useState<{ key: 'date' | 'fund' | 'account' | 'owner' | 'units' | 'price' | 'amount'; direction: 'asc' | 'desc' }>({
+    key: 'date',
+    direction: 'desc',
+  });
+  const [fxRateCache, setFxRateCache] = useState<Record<string, number>>({});
   const [fundImportRows, setFundImportRows] = useState<FundTransaction[]>([]);
   const [fundImportErrors, setFundImportErrors] = useState<string[]>([]);
   const [isFundImportOpen, setIsFundImportOpen] = useState(false);
@@ -129,6 +139,10 @@ export function TransactionLog() {
   const [depositEditingId, setDepositEditingId] = useState<string | null>(null);
   const [depositSearchQuery, setDepositSearchQuery] = useState('');
   const [depositStatusFilter, setDepositStatusFilter] = useState<'all' | 'active' | 'matured' | 'due-soon'>('active');
+  const [depositSort, setDepositSort] = useState<{ key: 'startDate' | 'owner' | 'institution' | 'principal' | 'maturityDate' | 'status'; direction: 'asc' | 'desc' }>({
+    key: 'startDate',
+    direction: 'desc',
+  });
   const [depositImportRows, setDepositImportRows] = useState<Deposit[]>([]);
   const [depositImportErrors, setDepositImportErrors] = useState<string[]>([]);
   const [isDepositImportOpen, setIsDepositImportOpen] = useState(false);
@@ -148,13 +162,64 @@ export function TransactionLog() {
     fxRateToBase: 1,
   });
 
+  useEffect(() => {
+    const accountId = formData.accountId;
+    const date = formData.date;
+    if (!accountId || !date) return;
+    const currency = getAccountCurrency(accountId);
+    if (!isAutoFxCurrency(currency)) return;
+    if (isFxManualOverride) return;
+    fetchFxRateForDate(currency, date)
+      .then(rate => {
+        setFxRateCache(prev => ({ ...prev, [getFxCacheKey(currency, date)]: rate }));
+        setFormData(prev => {
+          if (prev.accountId !== accountId || prev.date !== date) return prev;
+          if (prev.fxRateToBase === rate) return prev;
+          return { ...prev, fxRateToBase: rate };
+        });
+      })
+      .catch(() => undefined);
+  }, [formData.accountId, formData.date, state.marketData.fxRates, isFxManualOverride]);
+
+  useEffect(() => {
+    const accountId = rowEditData?.accountId;
+    const date = rowEditData?.date;
+    if (!accountId || !date) return;
+    const currency = getAccountCurrency(accountId);
+    if (!isAutoFxCurrency(currency)) return;
+    if (isRowFxManualOverride) return;
+    fetchFxRateForDate(currency, date)
+      .then(rate => {
+        setFxRateCache(prev => ({ ...prev, [getFxCacheKey(currency, date)]: rate }));
+        setRowEditData(prev => {
+          if (!prev || prev.accountId !== accountId || prev.date !== date) return prev;
+          if (prev.fxRateToBase === rate) return prev;
+          return { ...prev, fxRateToBase: rate };
+        });
+      })
+      .catch(() => undefined);
+  }, [rowEditData?.accountId, rowEditData?.date, state.marketData.fxRates, isRowFxManualOverride]);
+
+  useEffect(() => {
+    const accountId = fundFormData.accountId;
+    const date = fundFormData.date;
+    if (!accountId || !date) return;
+    const currency = getAccountCurrency(accountId);
+    if (!isAutoFxCurrency(currency)) return;
+    fetchFxRateForDate(currency, date)
+      .then(rate => {
+        setFxRateCache(prev => ({ ...prev, [getFxCacheKey(currency, date)]: rate }));
+      })
+      .catch(() => undefined);
+  }, [fundFormData.accountId, fundFormData.date, state.marketData.fxRates]);
+
   const handleSubmit = () => {
     if (formData.date && formData.amount && formData.categoryId && formData.description) {
       const accountCurrency = getAccountCurrency(formData.accountId);
       const accountAmount = Math.abs(Number(formData.amount) || 0);
       const fxRateToBase = accountCurrency === baseCurrency
         ? 1
-        : (Number.isFinite(formData.fxRateToBase) ? (formData.fxRateToBase as number) : getAccountFxRate(formData.accountId));
+        : (Number.isFinite(formData.fxRateToBase) ? (formData.fxRateToBase as number) : getAccountFxRate(formData.accountId, formData.date));
       const baseAmountValue = accountCurrency === baseCurrency ? accountAmount : accountAmount * fxRateToBase;
       addTransaction({
         ...formData,
@@ -170,6 +235,7 @@ export function TransactionLog() {
   };
 
   const resetForm = () => {
+    setIsFxManualOverride(false);
     setFormData({
       date: format(new Date(), 'yyyy-MM-dd'),
       amount: 0,
@@ -180,13 +246,37 @@ export function TransactionLog() {
     });
   };
 
+  const repeatTransaction = (transaction: Transaction) => {
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const accountAmount = Number.isFinite(transaction.accountAmount)
+      ? (transaction.accountAmount as number)
+      : transaction.amount;
+    setIsFxManualOverride(false);
+    setEditingId(null);
+    setRowEditData(null);
+    setFormData({
+      date: today,
+      amount: Math.abs(accountAmount),
+      categoryId: transaction.categoryId,
+      description: transaction.description,
+      type: transaction.type,
+      accountId: transaction.accountId,
+      spender: transaction.spender,
+      fxRateToBase: transaction.fxRateToBase ?? getAccountFxRate(transaction.accountId, today),
+    });
+    setTransactionFormOpen(true);
+    setActiveTab('transactions');
+  };
+
 
   const startEdit = (transaction: Transaction) => {
+    setIsRowFxManualOverride(false);
     setEditingId(transaction.id);
     setRowEditData({ ...transaction });
   };
 
   const cancelRowEdit = () => {
+    setIsRowFxManualOverride(false);
     setEditingId(null);
     setRowEditData(null);
   };
@@ -204,7 +294,7 @@ export function TransactionLog() {
       const accountAmount = Math.abs(Number(rowEditData.accountAmount ?? rowEditData.amount) || 0);
       const fxRateToBase = accountCurrency === baseCurrency
         ? 1
-        : (Number.isFinite(rowEditData.fxRateToBase) ? (rowEditData.fxRateToBase as number) : getAccountFxRate(rowEditData.accountId));
+        : (Number.isFinite(rowEditData.fxRateToBase) ? (rowEditData.fxRateToBase as number) : getAccountFxRate(rowEditData.accountId, rowEditData.date));
       const baseAmountValue = accountCurrency === baseCurrency ? accountAmount : accountAmount * fxRateToBase;
       updateTransaction(editingId, {
         ...rowEditData,
@@ -244,6 +334,36 @@ export function TransactionLog() {
   };
 
   const baseCurrency = state.settings.currency;
+  const getFxCacheKey = (currency: string, date: string) => `${currency}|${date}`;
+  const getFxRateEntry = (currency: string) => {
+    const normalizePair = (pair: string) => pair.replace(/\s+/g, '').toUpperCase();
+    const directPair = normalizePair(`${currency}/${baseCurrency}`);
+    const inversePair = normalizePair(`${baseCurrency}/${currency}`);
+    const direct = state.marketData.fxRates.find(rate => normalizePair(rate.pair) === directPair);
+    if (direct) return direct;
+    const inverse = state.marketData.fxRates.find(rate => normalizePair(rate.pair) === inversePair);
+    if (inverse) return { ...inverse, rate: inverse.rate ? 1 / inverse.rate : inverse.rate };
+    return undefined;
+  };
+  const isAutoFxCurrency = (currency: string) => {
+    if (!currency || currency === baseCurrency) return false;
+    return getFxRateEntry(currency)?.mode === 'auto';
+  };
+  const fetchFxRateForDate = async (currency: string, date: string) => {
+    const normalizedCurrency = currency.toUpperCase();
+    if (!normalizedCurrency || normalizedCurrency === baseCurrency) return 1;
+    try {
+      const url = `https://api.frankfurter.dev/v1/${date}?base=${encodeURIComponent(normalizedCurrency)}&symbols=${encodeURIComponent(baseCurrency)}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('fx_fetch_failed');
+      const data = (await response.json()) as { rates?: Record<string, number> };
+      const rate = data?.rates?.[baseCurrency];
+      if (Number.isFinite(rate)) return rate as number;
+    } catch {
+      // fall through
+    }
+    return getMarketFxRate(normalizedCurrency);
+  };
   const getAccountCurrency = (accountId?: string) => {
     const account = state.accounts.find(a => a.id === accountId);
     return account?.currency ?? baseCurrency;
@@ -259,12 +379,16 @@ export function TransactionLog() {
     if (Number.isFinite(inverse) && (inverse as number) > 0) return 1 / (inverse as number);
     return 1;
   };
-  const getAccountFxRate = (accountId?: string) => {
+  const getAccountFxRate = (accountId?: string, date?: string) => {
     const account = state.accounts.find(a => a.id === accountId);
     const currency = account?.currency ?? baseCurrency;
     if (currency === baseCurrency) return 1;
     const exchangeRate = account?.exchangeRate;
     if (Number.isFinite(exchangeRate) && (exchangeRate as number) > 0) return exchangeRate as number;
+    if (date) {
+      const cached = fxRateCache[getFxCacheKey(currency, date)];
+      if (Number.isFinite(cached) && (cached as number) > 0) return cached as number;
+    }
     return getMarketFxRate(currency);
   };
   const formatLocalAmount = (value: number, currency: string) =>
@@ -283,12 +407,12 @@ export function TransactionLog() {
     return intValue.toLocaleString(locale, { maximumFractionDigits: 0 });
   };
 
-  const computeBaseAmount = (accountId?: string, accountAmount?: number, fxRate?: number) => {
+  const computeBaseAmount = (accountId?: string, accountAmount?: number, fxRate?: number, date?: string) => {
     const currency = getAccountCurrency(accountId);
     const amountValue = Math.abs(Number(accountAmount) || 0);
     const rate = currency === baseCurrency
       ? 1
-      : (Number.isFinite(fxRate) ? (fxRate as number) : getAccountFxRate(accountId));
+      : (Number.isFinite(fxRate) ? (fxRate as number) : getAccountFxRate(accountId, date));
     const baseAmountValue = currency === baseCurrency ? amountValue : amountValue * rate;
     return {
       currency,
@@ -310,10 +434,6 @@ export function TransactionLog() {
   function buildSearchText(values: unknown[]) {
     return values.map(normalizeSearchValue).join(' ').toLowerCase();
   }
-
-  const getFundMeta = (fund: string) => {
-    return state.fundHoldingsMeta.find(meta => meta.fund === fund);
-  };
 
   const getNetUnitsForHolding = (fund: string, accountId?: string, excludeId?: string) => {
     const accountKey = accountId ?? '';
@@ -346,6 +466,23 @@ export function TransactionLog() {
     return category.id;
   };
 
+  const toggleSort = <T extends string>(current: { key: T; direction: 'asc' | 'desc' }, key: T) => {
+    if (current.key === key) {
+      return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+    }
+    return { key, direction: 'asc' };
+  };
+
+  const sortIndicator = <T extends string>(current: { key: T; direction: 'asc' | 'desc' }, key: T) => {
+    if (current.key !== key) return '';
+    return current.direction === 'asc' ? '▲' : '▼';
+  };
+
+  const compareValues = (a: string | number, b: string | number) => {
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    return String(a).localeCompare(String(b));
+  };
+
   const handleFundSubmit = () => {
     if (!fundFormData.date || !fundFormData.fund || !fundFormData.units || !fundFormData.price) return;
     setFundFormError('');
@@ -366,7 +503,12 @@ export function TransactionLog() {
     const cashTransactionId = generateId();
     const cashType = signedUnits > 0 ? 'expense' : 'income';
     const categoryId = getOrCreateFundCategory(fundFormData.type);
-    const cashFx = computeBaseAmount(fundFormData.accountId || undefined, grossAmount, getAccountFxRate(fundFormData.accountId || undefined));
+    const cashFx = computeBaseAmount(
+      fundFormData.accountId || undefined,
+      grossAmount,
+      getAccountFxRate(fundFormData.accountId || undefined, fundFormData.date),
+      fundFormData.date
+    );
     addTransaction({
       id: cashTransactionId,
       date: fundFormData.date,
@@ -494,7 +636,12 @@ export function TransactionLog() {
       const grossAmount = Math.abs(amount);
       const cashType = units > 0 ? 'expense' : 'income';
       const categoryId = getOrCreateFundCategory(type);
-      const cashFx = computeBaseAmount(fundRowEditData.accountId || undefined, grossAmount, getAccountFxRate(fundRowEditData.accountId || undefined));
+      const cashFx = computeBaseAmount(
+        fundRowEditData.accountId || undefined,
+        grossAmount,
+        getAccountFxRate(fundRowEditData.accountId || undefined, fundRowEditData.date),
+        fundRowEditData.date
+      );
       updateTransaction(fundRowEditData.cashTransactionId, {
         date: fundRowEditData.date,
         amount: cashFx.baseAmount,
@@ -547,9 +694,7 @@ export function TransactionLog() {
   };
 
   // Filter transactions
-  let filteredTransactions = [...state.transactions].sort((a, b) => 
-    new Date(b.date).getTime() - new Date(a.date).getTime()
-  );
+  let filteredTransactions = [...state.transactions];
 
   if (filterType !== 'all') {
     filteredTransactions = filteredTransactions.filter(t => t.type === filterType);
@@ -589,6 +734,30 @@ export function TransactionLog() {
     });
   }
 
+  const getTransactionSortValue = (transaction: Transaction) => {
+    switch (transactionSort.key) {
+      case 'date':
+        return transaction.date;
+      case 'description':
+        return transaction.description || '';
+      case 'category':
+        return getCategoryName(transaction.categoryId);
+      case 'account':
+        return getAccountLabel(transaction.accountId);
+      case 'owner':
+        return transaction.spender || '';
+      case 'amount':
+        return transaction.baseAmount ?? transaction.amount;
+      default:
+        return transaction.date;
+    }
+  };
+
+  filteredTransactions = filteredTransactions.sort((a, b) => {
+    const result = compareValues(getTransactionSortValue(a), getTransactionSortValue(b));
+    return transactionSort.direction === 'asc' ? result : -result;
+  });
+
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
   const currentPageSafe = Math.min(currentPage, totalPages);
   const paginatedTransactions = filteredTransactions.slice(
@@ -606,9 +775,7 @@ export function TransactionLog() {
 
   const filteredNet = filteredIncome - filteredExpenses;
 
-  let filteredFundTransactions = [...state.fundTransactions].sort((a, b) =>
-    new Date(b.date).getTime() - new Date(a.date).getTime()
-  );
+  let filteredFundTransactions = [...state.fundTransactions];
 
   if (fundFilterDateFrom) {
     filteredFundTransactions = filteredFundTransactions.filter(t => t.date >= fundFilterDateFrom);
@@ -640,15 +807,38 @@ export function TransactionLog() {
     });
   }
 
+  const getFundSortValue = (transaction: FundTransaction) => {
+    switch (fundSort.key) {
+      case 'date':
+        return transaction.date;
+      case 'fund':
+        return transaction.fund;
+      case 'account':
+        return getAccountLabel(transaction.accountId);
+      case 'owner':
+        return transaction.spender || '';
+      case 'units':
+        return transaction.units;
+      case 'price':
+        return transaction.price;
+      case 'amount':
+        return transaction.amount;
+      default:
+        return transaction.date;
+    }
+  };
+
+  filteredFundTransactions = filteredFundTransactions.sort((a, b) => {
+    const result = compareValues(getFundSortValue(a), getFundSortValue(b));
+    return fundSort.direction === 'asc' ? result : -result;
+  });
+
   const fundTotalPages = Math.max(1, Math.ceil(filteredFundTransactions.length / fundPageSize));
   const fundCurrentPageSafe = Math.min(fundCurrentPage, fundTotalPages);
   const paginatedFundTransactions = filteredFundTransactions.slice(
     (fundCurrentPageSafe - 1) * fundPageSize,
     fundCurrentPageSafe * fundPageSize
   );
-
-  const fundHoldings = calculateFundHoldings(state.fundTransactions, state.fundHoldingsMeta)
-    .filter(h => h.netUnits !== 0 || h.totalBuyUnits > 0);
 
   const filteredFundBuyTotal = filteredFundTransactions
     .filter(t => t.units > 0)
@@ -659,9 +849,7 @@ export function TransactionLog() {
   const filteredFundNetCash = filteredFundSellTotal - filteredFundBuyTotal;
 
   const depositToday = new Date();
-  let filteredDeposits = [...state.deposits].sort((a, b) =>
-    new Date(b.startDate).getTime() - new Date(a.startDate).getTime()
-  );
+  let filteredDeposits = [...state.deposits];
 
   if (depositStatusFilter !== 'all') {
     filteredDeposits = filteredDeposits.filter(deposit => {
@@ -688,6 +876,31 @@ export function TransactionLog() {
       return haystack.includes(normalizedDepositSearch);
     });
   }
+
+  const getDepositSortValue = (deposit: Deposit) => {
+    const status = getDepositStatus(deposit, depositToday, 7);
+    switch (depositSort.key) {
+      case 'startDate':
+        return deposit.startDate;
+      case 'owner':
+        return deposit.owner || '';
+      case 'institution':
+        return deposit.institution || '';
+      case 'principal':
+        return deposit.principal;
+      case 'maturityDate':
+        return deposit.maturityDate;
+      case 'status':
+        return status;
+      default:
+        return deposit.startDate;
+    }
+  };
+
+  filteredDeposits = filteredDeposits.sort((a, b) => {
+    const result = compareValues(getDepositSortValue(a), getDepositSortValue(b));
+    return depositSort.direction === 'asc' ? result : -result;
+  });
 
   const filteredDepositPrincipalTotal = filteredDeposits.reduce((sum, d) => sum + d.principal, 0);
   const filteredDepositMaturityTotal = filteredDeposits.reduce((sum, d) => sum + d.maturityValue, 0);
@@ -829,9 +1042,14 @@ export function TransactionLog() {
     }
   };
 
-  const formFx = computeBaseAmount(formData.accountId, formData.amount, formData.fxRateToBase);
+  const formFx = computeBaseAmount(formData.accountId, formData.amount, formData.fxRateToBase, formData.date);
   const rowEditFx = rowEditData
-    ? computeBaseAmount(rowEditData.accountId, rowEditData.accountAmount ?? rowEditData.amount, rowEditData.fxRateToBase)
+    ? computeBaseAmount(
+        rowEditData.accountId,
+        rowEditData.accountAmount ?? rowEditData.amount,
+        rowEditData.fxRateToBase,
+        rowEditData.date
+      )
     : null;
 
   const normalizeHeader = (value: string) => value.toLowerCase().replace(/\s+/g, '').trim();
@@ -1517,7 +1735,12 @@ export function TransactionLog() {
       const cashTransactionId = generateId();
       const cashType = row.units > 0 ? 'expense' : 'income';
       const categoryId = getOrCreateFundCategory(row.type);
-      const cashFx = computeBaseAmount(row.accountId || undefined, Math.abs(row.amount), getAccountFxRate(row.accountId || undefined));
+      const cashFx = computeBaseAmount(
+        row.accountId || undefined,
+        Math.abs(row.amount),
+        getAccountFxRate(row.accountId || undefined, row.date),
+        row.date
+      );
       cashTransactions.push({
         id: cashTransactionId,
         date: row.date,
@@ -1622,7 +1845,7 @@ export function TransactionLog() {
       }
 
       const accountCurrency = accountId ? getAccountCurrency(accountId) : baseCurrency;
-      const fxRateToBase = accountCurrency === baseCurrency ? 1 : getAccountFxRate(accountId);
+      const fxRateToBase = accountCurrency === baseCurrency ? 1 : getAccountFxRate(accountId, row.date);
       const accountAmount = row.amount;
       const baseAmountValue = accountCurrency === baseCurrency ? accountAmount : accountAmount * fxRateToBase;
 
@@ -1800,7 +2023,12 @@ export function TransactionLog() {
         <>
           {/* Add/Edit Form */}
           <div className="bg-white rounded-lg shadow p-6">
-            <Accordion type="single" collapsible>
+            <Accordion
+              type="single"
+              collapsible
+              value={transactionFormOpen ? 'add-transaction' : ''}
+              onValueChange={(value) => setTransactionFormOpen(value === 'add-transaction')}
+            >
               <AccordionItem value="add-transaction" className="border-none">
                 <AccordionTrigger className="py-0">
                   <span className="text-xl font-semibold text-gray-900">{t('Add New Transaction', language)}</span>
@@ -1872,7 +2100,10 @@ export function TransactionLog() {
                     <input
                       type="number"
                       value={formData.fxRateToBase ?? ''}
-                      onChange={(e) => setFormData({ ...formData, fxRateToBase: parseFloat(e.target.value) || 0 })}
+                      onChange={(e) => {
+                        setIsFxManualOverride(true);
+                        setFormData({ ...formData, fxRateToBase: parseFloat(e.target.value) || 0 });
+                      }}
                       step="0.0001"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                     />
@@ -1896,7 +2127,8 @@ export function TransactionLog() {
                     value={formData.accountId || ''}
                     onChange={(e) => {
                       const accountId = e.target.value || undefined;
-                      const fxRateToBase = accountId ? getAccountFxRate(accountId) : 1;
+                      const fxRateToBase = accountId ? getAccountFxRate(accountId, formData.date) : 1;
+                      setIsFxManualOverride(false);
                       setFormData({ ...formData, accountId, fxRateToBase });
                     }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
@@ -2123,12 +2355,54 @@ export function TransactionLog() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Date', language)}</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Category', language)}</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Description', language)}</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Account', language)}</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Owner', language)}</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('Amount', language)}</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <button
+                    onClick={() => setTransactionSort(toggleSort(transactionSort, 'date'))}
+                    className="flex items-center gap-1"
+                  >
+                    {t('Date', language)} <span>{sortIndicator(transactionSort, 'date')}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <button
+                    onClick={() => setTransactionSort(toggleSort(transactionSort, 'category'))}
+                    className="flex items-center gap-1"
+                  >
+                    {t('Category', language)} <span>{sortIndicator(transactionSort, 'category')}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <button
+                    onClick={() => setTransactionSort(toggleSort(transactionSort, 'description'))}
+                    className="flex items-center gap-1"
+                  >
+                    {t('Description', language)} <span>{sortIndicator(transactionSort, 'description')}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <button
+                    onClick={() => setTransactionSort(toggleSort(transactionSort, 'account'))}
+                    className="flex items-center gap-1"
+                  >
+                    {t('Account', language)} <span>{sortIndicator(transactionSort, 'account')}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <button
+                    onClick={() => setTransactionSort(toggleSort(transactionSort, 'owner'))}
+                    className="flex items-center gap-1"
+                  >
+                    {t('Owner', language)} <span>{sortIndicator(transactionSort, 'owner')}</span>
+                  </button>
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                  <button
+                    onClick={() => setTransactionSort(toggleSort(transactionSort, 'amount'))}
+                    className="flex items-center gap-1 justify-end w-full"
+                  >
+                    {t('Amount', language)} <span>{sortIndicator(transactionSort, 'amount')}</span>
+                  </button>
+                </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('Actions', language)}</th>
               </tr>
             </thead>
@@ -2197,7 +2471,8 @@ export function TransactionLog() {
                           value={rowEditData.accountId || ''}
                           onChange={(e) => {
                             const accountId = e.target.value || undefined;
-                            const fxRateToBase = accountId ? getAccountFxRate(accountId) : 1;
+                            const fxRateToBase = accountId ? getAccountFxRate(accountId, rowEditData.date) : 1;
+                            setIsRowFxManualOverride(false);
                             setRowEditData({ ...rowEditData, accountId, fxRateToBase });
                           }}
                           className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
@@ -2262,10 +2537,13 @@ export function TransactionLog() {
                               <input
                                 type="number"
                                 value={rowEditData.fxRateToBase ?? ''}
-                                onChange={(e) => setRowEditData({
-                                  ...rowEditData,
-                                  fxRateToBase: parseFloat(e.target.value) || 0,
-                                })}
+                                onChange={(e) => {
+                                  setIsRowFxManualOverride(true);
+                                  setRowEditData({
+                                    ...rowEditData,
+                                    fxRateToBase: parseFloat(e.target.value) || 0,
+                                  });
+                                }}
                                 step="0.0001"
                                 className="w-24 px-2 py-1 border border-gray-300 rounded text-right"
                               />
@@ -2282,6 +2560,8 @@ export function TransactionLog() {
                             <span className="text-xs text-gray-500">
                               {formatLocalAmount(transaction.accountAmount as number, transaction.accountCurrency)}
                               {transaction.fxRateToBase ? ` @ ${transaction.fxRateToBase}` : ''}
+                              {' → '}
+                              {formatCurrency(transaction.baseAmount ?? transaction.amount, state.settings.currency, locale)}
                             </span>
                           )}
                         </div>
@@ -2311,6 +2591,13 @@ export function TransactionLog() {
                               className="p-2 text-blue-600 hover:bg-blue-50 rounded"
                             >
                               <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => repeatTransaction(transaction)}
+                              className="p-2 text-gray-600 hover:bg-gray-100 rounded"
+                              title={t('Repeat', language)}
+                            >
+                              <Repeat className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => deleteTransaction(transaction.id)}
@@ -2682,23 +2969,7 @@ export function TransactionLog() {
             </Accordion>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setFundViewMode('transactions')}
-              className={`px-4 py-2 rounded-lg text-sm ${fundViewMode === 'transactions' ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-            >
-              {t('Transactions', language)}
-            </button>
-            <button
-              onClick={() => setFundViewMode('holdings')}
-              className={`px-4 py-2 rounded-lg text-sm ${fundViewMode === 'holdings' ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-            >
-              {t('Holdings', language)}
-            </button>
-          </div>
-
-          {fundViewMode === 'transactions' && (
-            <>
+          
           <div className="bg-white rounded-lg shadow p-4">
             <div className="flex items-center gap-4 flex-wrap">
               <div className="flex items-center gap-2">
@@ -2853,13 +3124,62 @@ export function TransactionLog() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Date', language)}</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Fund', language)}</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Account', language)}</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('Owner', language)}</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('Units', language)}</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('Price', language)}</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('Total', language)}</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setFundSort(toggleSort(fundSort, 'date'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Date', language)} <span>{sortIndicator(fundSort, 'date')}</span>
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setFundSort(toggleSort(fundSort, 'fund'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Fund', language)} <span>{sortIndicator(fundSort, 'fund')}</span>
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setFundSort(toggleSort(fundSort, 'account'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Account', language)} <span>{sortIndicator(fundSort, 'account')}</span>
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setFundSort(toggleSort(fundSort, 'owner'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Owner', language)} <span>{sortIndicator(fundSort, 'owner')}</span>
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setFundSort(toggleSort(fundSort, 'units'))}
+                        className="flex items-center gap-1 justify-end w-full"
+                      >
+                        {t('Units', language)} <span>{sortIndicator(fundSort, 'units')}</span>
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setFundSort(toggleSort(fundSort, 'price'))}
+                        className="flex items-center gap-1 justify-end w-full"
+                      >
+                        {t('Price', language)} <span>{sortIndicator(fundSort, 'price')}</span>
+                      </button>
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setFundSort(toggleSort(fundSort, 'amount'))}
+                        className="flex items-center gap-1 justify-end w-full"
+                      >
+                        {t('Total', language)} <span>{sortIndicator(fundSort, 'amount')}</span>
+                      </button>
+                    </th>
                     <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('Actions', language)}</th>
                   </tr>
                 </thead>
@@ -3043,70 +3363,7 @@ export function TransactionLog() {
               </div>
             </div>
           </div>
-          </>
-          )}
-
-          {fundViewMode === 'holdings' && (
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-xl font-semibold text-gray-900 mb-4">{t('Fund Holdings', language)}</h3>
-              {fundHoldings.length === 0 ? (
-                <div className="text-sm text-gray-500">{t('No fund holdings yet.', language)}</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Fund', language)}</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Current Price', language)}</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Transaction Fee %', language)}</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Stopaj %', language)}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {Array.from(new Set(fundHoldings.map(holding => holding.fund))).map(fund => {
-                        const meta = getFundMeta(fund);
-                        return (
-                          <tr key={fund}>
-                            <td className="px-3 py-2">{fund}</td>
-                            <td className="px-3 py-2 text-right">
-                              <input
-                                type="number"
-                                value={meta?.currentPrice ?? 0}
-                                onChange={(e) => upsertFundHoldingMeta(fund, { currentPrice: parseFloat(e.target.value) || 0 })}
-                                step="0.0001"
-                                className="w-24 px-2 py-1 border border-gray-300 rounded text-right"
-                              />
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <input
-                                type="number"
-                                value={meta?.transactionFeeRate ?? 0}
-                                onChange={(e) => upsertFundHoldingMeta(fund, { transactionFeeRate: parseFloat(e.target.value) || 0 })}
-                                step="0.01"
-                                className="w-20 px-2 py-1 border border-gray-300 rounded text-right"
-                              />
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <input
-                                type="number"
-                                value={meta?.withholdingTaxRate ?? 0}
-                                onChange={(e) => upsertFundHoldingMeta(fund, { withholdingTaxRate: parseFloat(e.target.value) || 0 })}
-                                step="0.01"
-                                className="w-20 px-2 py-1 border border-gray-300 rounded text-right"
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              <div className="mt-2 text-xs text-gray-500">
-                {t('Valuation uses the latest transaction price unless overridden by current price.', language)}
-              </div>
-            </div>
-          )}
+          
 
           <Dialog open={isFundImportOpen} onOpenChange={setIsFundImportOpen}>
             <DialogContent className="max-w-6xl w-full max-h-[75vh] overflow-hidden">
@@ -3470,17 +3727,59 @@ export function TransactionLog() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Owner', language)}</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Institution', language)}</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Principal', language)}</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setDepositSort(toggleSort(depositSort, 'owner'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Owner', language)} <span>{sortIndicator(depositSort, 'owner')}</span>
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setDepositSort(toggleSort(depositSort, 'institution'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Institution', language)} <span>{sortIndicator(depositSort, 'institution')}</span>
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setDepositSort(toggleSort(depositSort, 'principal'))}
+                        className="flex items-center gap-1 justify-end w-full"
+                      >
+                        {t('Principal', language)} <span>{sortIndicator(depositSort, 'principal')}</span>
+                      </button>
+                    </th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Term Days', language)}</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Gross Rate %', language)}</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Stopaj %', language)}</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Start Date', language)}</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Maturity Date', language)}</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setDepositSort(toggleSort(depositSort, 'startDate'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Start Date', language)} <span>{sortIndicator(depositSort, 'startDate')}</span>
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setDepositSort(toggleSort(depositSort, 'maturityDate'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Maturity Date', language)} <span>{sortIndicator(depositSort, 'maturityDate')}</span>
+                      </button>
+                    </th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Net Interest', language)}</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Maturity Value', language)}</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Status', language)}</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                      <button
+                        onClick={() => setDepositSort(toggleSort(depositSort, 'status'))}
+                        className="flex items-center gap-1"
+                      >
+                        {t('Status', language)} <span>{sortIndicator(depositSort, 'status')}</span>
+                      </button>
+                    </th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Actions', language)}</th>
                   </tr>
                 </thead>

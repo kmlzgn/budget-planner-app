@@ -3,7 +3,7 @@ import { useBudget } from '../context/BudgetContext';
 import { BarChart, Bar, PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { calculateRecurringForMonth, calculateActualForMonth } from '../utils/budgetCalculations';
 import { TrendingUp, TrendingDown, DollarSign, Target } from 'lucide-react';
-import { getMonthNames, t } from '../utils/i18n';
+import { formatDateDisplay, getMonthNames, t } from '../utils/i18n';
 import { parseISO } from 'date-fns';
 import { formatCurrency } from '../utils/formatting';
 
@@ -50,6 +50,17 @@ export function AnnualDashboard() {
   const totalActualExpenses = monthlyData.reduce((sum, m) => sum + m.actualExpenses, 0);
   const totalPlannedBalance = totalPlannedIncome - totalPlannedExpenses;
   const totalActualBalance = totalActualIncome - totalActualExpenses;
+
+  const snapshotsForYear = state.wealthSnapshots
+    .filter(snapshot => parseISO(snapshot.date).getFullYear() === selectedYear)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const firstSnapshot = snapshotsForYear[0];
+  const lastSnapshot = snapshotsForYear[snapshotsForYear.length - 1];
+  const hasWealthChange = snapshotsForYear.length >= 2 && firstSnapshot && lastSnapshot;
+  const wealthChange = hasWealthChange ? lastSnapshot.netWealth - firstSnapshot.netWealth : 0;
+  const wealthChangePct = hasWealthChange && firstSnapshot.netWealth
+    ? (wealthChange / firstSnapshot.netWealth) * 100
+    : 0;
 
   // Spending by category
   const categoryData = state.categories
@@ -167,6 +178,31 @@ export function AnnualDashboard() {
             {savingsRate >= 20 ? t('Excellent!', language) : savingsRate >= 10 ? t('Good', language) : t('Room to improve', language)}
           </div>
         </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-gray-600">{t('Wealth Change', language)}</span>
+          <TrendingUp className={`w-5 h-5 ${wealthChange >= 0 ? 'text-green-500' : 'text-red-500'}`} />
+        </div>
+        <div className="text-2xl font-bold text-gray-900">
+          {hasWealthChange ? formatCurrency(wealthChange, state.settings.currency, locale) : '-'}
+          {hasWealthChange && (
+            <span className="text-sm text-gray-500 ml-2">
+              ({wealthChangePct.toFixed(1)}%)
+            </span>
+          )}
+        </div>
+        {hasWealthChange && (
+          <div className="text-xs text-gray-500 mt-1">
+            {formatDateDisplay(parseISO(firstSnapshot.date), language)} â†’ {formatDateDisplay(parseISO(lastSnapshot.date), language)}
+          </div>
+        )}
+        {!hasWealthChange && (
+          <div className="text-xs text-gray-500 mt-1">
+            {t('No snapshots yet. Capture a snapshot to start tracking history.', language)}
+          </div>
+        )}
       </div>
 
       {/* Monthly Trend */}
