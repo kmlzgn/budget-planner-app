@@ -19,6 +19,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
+import { CurrencyInput, PercentInput, UnitsInput } from '../components/inputs/NumberInput';
+import { SmartDateInput } from '../components/inputs/SmartDateInput';
 
 type ImportRow = {
   date: string;
@@ -1891,7 +1894,10 @@ export function TransactionLog() {
     <div className="max-w-7xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Transaction Log', language)}</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            {t('Transaction Log', language)}
+            <BreadcrumbInline />
+          </h1>
           <p className="text-gray-600">{t('Record all variable income and expenses', language)}</p>
         </div>
       </div>
@@ -2037,10 +2043,9 @@ export function TransactionLog() {
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Date', language)} *</label>
-                      <input
-                        type="date"
+                      <SmartDateInput
                         value={formData.date || ''}
-                        onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                        onChange={(value) => setFormData({ ...formData, date: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                       />
                     </div>
@@ -2078,12 +2083,10 @@ export function TransactionLog() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     {t('Amount', language)} * ({formFx.currency})
                   </label>
-                  <input
-                    type="number"
-                    value={formData.amount || ''}
-                    onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
+                  <CurrencyInput
+                    value={formData.amount || 0}
+                    onValueChange={(value) => setFormData({ ...formData, amount: value })}
                     placeholder="0.00"
-                    step="0.01"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                   />
                   {formFx.isForeign && (
@@ -2097,14 +2100,12 @@ export function TransactionLog() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       {t('FX Rate to Base', language)} ({formFx.currency} â†’ {baseCurrency})
                     </label>
-                    <input
-                      type="number"
-                      value={formData.fxRateToBase ?? ''}
-                      onChange={(e) => {
+                    <UnitsInput
+                      value={formData.fxRateToBase ?? 0}
+                      onValueChange={(value) => {
                         setIsFxManualOverride(true);
-                        setFormData({ ...formData, fxRateToBase: parseFloat(e.target.value) || 0 });
+                        setFormData({ ...formData, fxRateToBase: value });
                       }}
-                      step="0.0001"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                     />
                   </div>
@@ -2868,10 +2869,9 @@ export function TransactionLog() {
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Date', language)} *</label>
-                      <input
-                        type="date"
+                      <SmartDateInput
                         value={fundFormData.date}
-                        onChange={(e) => setFundFormData({ ...fundFormData, date: e.target.value })}
+                        onChange={(value) => setFundFormData({ ...fundFormData, date: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
@@ -2923,21 +2923,17 @@ export function TransactionLog() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Units', language)} *</label>
-                      <input
-                        type="number"
-                        value={fundFormData.units || ''}
-                        onChange={(e) => setFundFormData({ ...fundFormData, units: parseInt(e.target.value, 10) || 0 })}
-                        step="1"
+                      <UnitsInput
+                        value={fundFormData.units}
+                        onValueChange={(value) => setFundFormData({ ...fundFormData, units: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Price', language)} *</label>
-                      <input
-                        type="number"
-                        value={fundFormData.price || ''}
-                        onChange={(e) => setFundFormData({ ...fundFormData, price: parseFloat(e.target.value) || 0 })}
-                        step="0.0001"
+                      <UnitsInput
+                        value={fundFormData.price}
+                        onValueChange={(value) => setFundFormData({ ...fundFormData, price: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
@@ -3195,10 +3191,9 @@ export function TransactionLog() {
                       <tr key={tx.id} className="hover:bg-gray-50">
                         <td className="px-4 py-3 text-sm">
                           {fundEditingId === tx.id && fundRowEditData ? (
-                            <input
-                              type="date"
+                            <SmartDateInput
                               value={fundRowEditData.date || ''}
-                              onChange={(e) => setFundRowEditData({ ...fundRowEditData, date: e.target.value })}
+                              onChange={(value) => setFundRowEditData({ ...fundRowEditData, date: value })}
                               className="w-full px-2 py-1 border border-gray-300 rounded"
                             />
                           ) : (
@@ -3253,11 +3248,9 @@ export function TransactionLog() {
                         </td>
                         <td className="px-4 py-3 text-sm text-right">
                           {fundEditingId === tx.id && fundRowEditData ? (
-                            <input
-                              type="number"
-                              value={fundRowEditData.units || ''}
-                              onChange={(e) => setFundRowEditData({ ...fundRowEditData, units: parseInt(e.target.value, 10) || 0 })}
-                              step="1"
+                            <UnitsInput
+                              value={fundRowEditData.units}
+                              onValueChange={(value) => setFundRowEditData({ ...fundRowEditData, units: value })}
                               className="w-24 px-2 py-1 border border-gray-300 rounded text-right"
                             />
                           ) : (
@@ -3266,11 +3259,9 @@ export function TransactionLog() {
                         </td>
                         <td className="px-4 py-3 text-sm text-right">
                           {fundEditingId === tx.id && fundRowEditData ? (
-                            <input
-                              type="number"
-                              value={fundRowEditData.price || ''}
-                              onChange={(e) => setFundRowEditData({ ...fundRowEditData, price: parseFloat(e.target.value) || 0 })}
-                              step="0.0001"
+                            <UnitsInput
+                              value={fundRowEditData.price}
+                              onValueChange={(value) => setFundRowEditData({ ...fundRowEditData, price: value })}
                               className="w-24 px-2 py-1 border border-gray-300 rounded text-right"
                             />
                           ) : (
@@ -3560,46 +3551,41 @@ export function TransactionLog() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Principal', language)} *</label>
-                      <input
-                        type="number"
-                        value={depositFormData.principal || ''}
-                        onChange={(e) => setDepositFormData({ ...depositFormData, principal: parseFloat(e.target.value) || 0 })}
+                      <CurrencyInput
+                        value={depositFormData.principal}
+                        onValueChange={(value) => setDepositFormData({ ...depositFormData, principal: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Term Days', language)} *</label>
-                      <input
-                        type="number"
-                        value={depositFormData.termDays || ''}
-                        onChange={(e) => setDepositFormData({ ...depositFormData, termDays: parseInt(e.target.value, 10) || 0 })}
+                      <UnitsInput
+                        value={depositFormData.termDays}
+                        onValueChange={(value) => setDepositFormData({ ...depositFormData, termDays: Math.max(0, Math.round(value)) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Gross Rate %', language)}</label>
-                      <input
-                        type="number"
-                        value={depositFormData.grossRate || ''}
-                        onChange={(e) => setDepositFormData({ ...depositFormData, grossRate: parseFloat(e.target.value) || 0 })}
+                      <PercentInput
+                        value={depositFormData.grossRate}
+                        onValueChange={(value) => setDepositFormData({ ...depositFormData, grossRate: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Stopaj %', language)}</label>
-                      <input
-                        type="number"
-                        value={depositFormData.withholdingTaxRate || ''}
-                        onChange={(e) => setDepositFormData({ ...depositFormData, withholdingTaxRate: parseFloat(e.target.value) || 0 })}
+                      <PercentInput
+                        value={depositFormData.withholdingTaxRate}
+                        onValueChange={(value) => setDepositFormData({ ...depositFormData, withholdingTaxRate: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Start Date', language)} *</label>
-                      <input
-                        type="date"
+                      <SmartDateInput
                         value={depositFormData.startDate || ''}
-                        onChange={(e) => setDepositFormData({ ...depositFormData, startDate: e.target.value })}
+                        onChange={(value) => setDepositFormData({ ...depositFormData, startDate: value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>

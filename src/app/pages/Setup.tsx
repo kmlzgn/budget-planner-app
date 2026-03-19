@@ -6,7 +6,9 @@ import { BudgetState, Category, CategoryClassification, Transaction, FundTransac
 import { generateId } from '../utils/id';
 import { getMonthNames, t } from '../utils/i18n';
 import { format } from 'date-fns';
+import { UnitsInput } from '../components/inputs/NumberInput';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
 
 const currencies = ['$', '€', '£', '¥', '₹', 'R$', 'A$', 'C$', 'CHF', 'kr', 'zł', '₺'];
 export function Setup() {
@@ -49,6 +51,7 @@ export function Setup() {
   const [importAvailable, setImportAvailable] = useState<DatasetKey[]>([]);
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
   const [importSummary, setImportSummary] = useState<Record<DatasetKey, number>>({} as Record<DatasetKey, number>);
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [importPayload, setImportPayload] = useState<{ version: number; exportedAt?: string; data: Record<string, unknown> } | null>(null);
   const [importError, setImportError] = useState('');
   const [backupMeta, setBackupMeta] = useState<{ lastExportAt?: string; lastImportAt?: string; version?: number }>(() => {
@@ -177,6 +180,7 @@ export function Setup() {
 
   const handleImportFile = async (file: File) => {
     setImportError('');
+    setImportWarnings([]);
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as { version?: number; exportedAt?: string; data?: Record<string, unknown> };
@@ -185,14 +189,15 @@ export function Setup() {
         return;
       }
 
-      const available = datasetKeys.filter(key => Array.isArray((parsed.data as Record<string, unknown>)[key]));
+      const validated = validateImportData(parsed.data as Record<string, unknown>);
+      const available = datasetKeys.filter(key => Array.isArray(validated.data[key]) && (validated.data[key] as unknown[]).length > 0);
       if (available.length === 0) {
-        setImportError(t('No recognized datasets found in the backup.', language));
+        setImportError(t('No valid rows found to import.', language));
         return;
       }
 
       const summary = available.reduce((acc, key) => {
-        const rows = (parsed.data as Record<string, unknown>)[key] as unknown[];
+        const rows = (validated.data as Record<string, unknown>)[key] as unknown[];
         acc[key] = Array.isArray(rows) ? rows.length : 0;
         return acc;
       }, {} as Record<DatasetKey, number>);
@@ -200,11 +205,12 @@ export function Setup() {
       setImportPayload({
         version: parsed.version ?? 1,
         exportedAt: parsed.exportedAt,
-        data: parsed.data as Record<string, unknown>,
+        data: validated.data as Record<string, unknown>,
       });
       setImportAvailable(available);
       setImportSelection(available.reduce((acc, key) => ({ ...acc, [key]: true }), {} as Record<DatasetKey, boolean>));
       setImportSummary(summary);
+      setImportWarnings(validated.warnings);
       setImportMode('merge');
       setDataMessage('');
       setIsImportOpen(true);
@@ -320,6 +326,98 @@ export function Setup() {
 
   const normalizeStringList = (list: unknown) =>
     Array.isArray(list) ? list.filter(item => typeof item === 'string' && item.trim()) as string[] : [];
+
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+  const filterValidRows = <T>(
+    rows: unknown,
+    isValid: (row: Record<string, unknown>) => row is T
+  ): { valid: T[]; invalid: number } => {
+    if (!Array.isArray(rows)) return { valid: [], invalid: 0 };
+    let invalid = 0;
+    const valid = rows.filter((row): row is T => {
+      if (!isRecord(row)) {
+        invalid += 1;
+        return false;
+      }
+      if (!isValid(row)) {
+        invalid += 1;
+        return false;
+      }
+      return true;
+    });
+    return { valid, invalid };
+  };
+
+  const validateImportData = (payload: Record<string, unknown>) => {
+    const warnings: string[] = [];
+    const invalidSummary = {} as Record<DatasetKey, number>;
+    const data: Record<string, unknown> = { ...payload };
+
+    const transactions = filterValidRows<Transaction>(payload.transactions, row =>
+      typeof row.id === 'string'
+      && typeof row.date === 'string'
+      && typeof row.categoryId === 'string'
+      && typeof row.type === 'string'
+      && Number.isFinite(row.amount)
+    );
+    data.transactions = transactions.valid;
+    invalidSummary.transactions = transactions.invalid;
+
+    const deposits = filterValidRows<Deposit>(payload.deposits, row =>
+      typeof row.id === 'string'
+      && Number.isFinite(row.principal)
+      && typeof row.startDate === 'string'
+    );
+    data.deposits = deposits.valid;
+    invalidSummary.deposits = deposits.invalid;
+
+    const accounts = filterValidRows<Account>(payload.accounts, row =>
+      typeof row.id === 'string'
+      && typeof row.name === 'string'
+      && typeof row.type === 'string'
+      && Number.isFinite(row.openingBalance)
+      && Number.isFinite(row.currentBalance)
+      && typeof row.isAsset === 'boolean'
+    );
+    data.accounts = accounts.valid;
+    invalidSummary.accounts = accounts.invalid;
+
+    const categories = filterValidRows<Category>(payload.categories, row =>
+      typeof row.id === 'string'
+      && typeof row.name === 'string'
+      && typeof row.type === 'string'
+    );
+    data.categories = categories.valid;
+    invalidSummary.categories = categories.invalid;
+
+    const funds = filterValidRows<FundTransaction>(payload.funds, row =>
+      typeof row.id === 'string'
+      && typeof row.fund === 'string'
+      && typeof row.date === 'string'
+      && Number.isFinite(row.units)
+      && Number.isFinite(row.price)
+    );
+    data.funds = funds.valid;
+    invalidSummary.funds = funds.invalid;
+
+    const fundPrices = filterValidRows<FundHoldingMeta>(payload.fundPrices, row =>
+      typeof row.fund === 'string'
+      && Number.isFinite(row.currentPrice)
+    );
+    data.fundPrices = fundPrices.valid;
+    invalidSummary.fundPrices = fundPrices.invalid;
+
+    datasetKeys.forEach(key => {
+      const invalidCount = invalidSummary[key] ?? 0;
+      if (invalidCount > 0) {
+        warnings.push(`${t(datasetLabels[key], language)}: ${invalidCount} ${t('Invalid', language)} ${t('rows', language)}`);
+      }
+    });
+
+    return { data, warnings, invalidSummary };
+  };
 
   const handleApplyImport = () => {
     if (!importPayload) return;
@@ -487,7 +585,10 @@ export function Setup() {
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Setup & Configuration', language)}</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          {t('Setup & Configuration', language)}
+          <BreadcrumbInline />
+        </h1>
         <p className="text-gray-600">{t('Configure your budget settings and customize categories', language)}</p>
       </div>
 
@@ -556,10 +657,9 @@ export function Setup() {
             <label className="block text-sm font-medium text-gray-700 mb-2">
               {t('Budget Start Year', language)} *
             </label>
-            <input
-              type="number"
+            <UnitsInput
               value={draftSettings.startYear}
-              onChange={(e) => setDraftSettings({ ...draftSettings, startYear: parseInt(e.target.value) })}
+              onValueChange={(value) => setDraftSettings({ ...draftSettings, startYear: Math.max(0, Math.round(value)) })}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
           </div>
@@ -1010,6 +1110,14 @@ export function Setup() {
               </div>
             ))}
           </div>
+          {importWarnings.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-1">
+              <div className="font-medium">{t('Import Warnings', language)}</div>
+              {importWarnings.map((warning, index) => (
+                <div key={`${warning}-${index}`}>{warning}</div>
+              ))}
+            </div>
+          )}
           <div className="text-sm">
             <div className="font-medium mb-2">{t('Import Mode', language)}</div>
             <div className="flex gap-3">

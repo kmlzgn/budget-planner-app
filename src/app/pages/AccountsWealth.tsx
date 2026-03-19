@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { useAccountsDomain, useBudgetState, useSavingsGoalsDomain, useWealthSnapshotsDomain } from '../context/budgetDomains';
 import { useBudget } from '../context/BudgetContext';
 import { Plus, Trash2, Edit2, TrendingUp, Check } from 'lucide-react';
@@ -7,13 +7,19 @@ import { generateId } from '../utils/id';
 import { format } from 'date-fns';
 import { getCreditCardCycleSummary } from '../utils/budgetCalculations';
 import { formatCurrency } from '../utils/formatting';
-import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from 'recharts';
+import { CurrencyInput, UnitsInput } from '../components/inputs/NumberInput';
+import { SmartDateInput } from '../components/inputs/SmartDateInput';
+import { Line, LineChart, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis, Legend } from 'recharts';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { adjustForInflation, calculateXirr, filterSnapshotsByRange } from '../utils/wealthAnalytics';
 import { getDepositExpectedValue } from '../utils/wealthCalculations';
-import { buildWealthBreakdown, getWealthTotals } from '../utils/wealthSelectors';
+import { buildWealthBreakdown } from '../utils/wealthSelectors';
+import { getDebtSummary, getNetWorthSummary, getPortfolioAllocation, getTransferAwareMonthlyOutflowSummary } from '../utils/financeSummaries';
+import { getFundPortfolioSummary } from '../utils/portfolioSummaries';
 import { t } from '../utils/i18n';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
+import { TransferAwareOutflowDetail } from '../components/TransferAwareOutflowDetail';
 
 const accountTypes: { value: AccountType; label: string; isAsset: boolean }[] = [
   { value: 'cash', label: 'Cash', isAsset: true },
@@ -222,7 +228,7 @@ export function AccountsWealth() {
     if (!account) return t('Unknown', language);
     const institution = account.institution?.trim();
     const currencyTag = account.currency ? ` (${account.currency})` : '';
-    return institution ? `${institution} • ${account.name}${currencyTag}` : `${account.name}${currencyTag}`;
+    return institution ? `${institution} â€¢ ${account.name}${currencyTag}` : `${account.name}${currencyTag}`;
   };
 
   const formatLocalAmount = (value: number, currency: string) =>
@@ -301,6 +307,7 @@ export function AccountsWealth() {
   };
 
   const today = new Date();
+  const wealthTotals = getNetWorthSummary(state, today);
   const {
     accountBalances,
     fundHoldings,
@@ -329,7 +336,19 @@ export function AccountsWealth() {
     totalAssets,
     totalLiabilities,
     netWorth,
-  } = getWealthTotals(state, today);
+  } = wealthTotals;
+  const fundPortfolio = getFundPortfolioSummary(state, wealthTotals);
+  const debtSummary = getDebtSummary(state.debts);
+  const transferAwareOutflow = getTransferAwareMonthlyOutflowSummary(state, today.getFullYear(), today.getMonth());
+  const portfolioAllocation = getPortfolioAllocation(wealthTotals, {
+    cash: t('Cash', language),
+    funds: t('Funds', language),
+    deposits: t('Deposits', language),
+    gold: t('Gold', language),
+    blocked: t('Blocked', language),
+    other: t('Other', language),
+  });
+  const portfolioTotal = portfolioAllocation.reduce((sum, item) => sum + item.value, 0);
   const todayStr = format(today, 'yyyy-MM-dd');
   const fundCashflows = state.fundTransactions.map(t => ({
     date: t.date,
@@ -554,13 +573,17 @@ export function AccountsWealth() {
 
   const dataIssues: Array<{ level: 'error' | 'warning'; message: string }> = [];
   const formatIssue = (key: string, count: number) => t(key, language).replace('{count}', String(count));
-  const invalidFundRows = state.fundTransactions.filter(t => !t.date || !t.fund || !t.price || t.units === 0);
-  if (invalidFundRows.length > 0) {
-    dataIssues.push({ level: 'error', message: formatIssue('Fund transactions have missing fields or zero units.', invalidFundRows.length) });
+  if (fundPortfolio.invalidTransactionCount > 0) {
+    dataIssues.push({
+      level: 'error',
+      message: formatIssue('Fund transactions have missing fields or zero units.', fundPortfolio.invalidTransactionCount),
+    });
   }
-  const holdingsMissingPrice = fundHoldings.filter(h => h.currentPrice === 0 && h.lastPrice === 0);
-  if (holdingsMissingPrice.length > 0) {
-    dataIssues.push({ level: 'warning', message: formatIssue('Fund holdings have no price for valuation.', holdingsMissingPrice.length) });
+  if (fundPortfolio.missingPriceCount > 0) {
+    dataIssues.push({
+      level: 'warning',
+      message: formatIssue('Fund holdings have no price for valuation.', fundPortfolio.missingPriceCount),
+    });
   }
   const invalidDeposits = state.deposits.filter(
     d => !d.startDate || d.principal <= 0 || d.termDays <= 0 || d.grossRate <= 0
@@ -640,7 +663,10 @@ export function AccountsWealth() {
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Accounts & Wealth Tracking', language)}</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          {t('Accounts & Wealth Tracking', language)}
+          <BreadcrumbInline />
+        </h1>
         <p className="text-gray-600">{t('Monitor your accounts, net worth, and savings goals', language)}</p>
       </div>
 
@@ -751,7 +777,7 @@ export function AccountsWealth() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white rounded-lg shadow p-5">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-gray-500">{t('Funds Summary', language)}</div>
+            <div className="text-sm text-gray-500">{t('Portfolio Cockpit', language)}</div>
             <button
               onClick={() => setAdvancedSections(prev => Array.from(new Set([...prev, 'fund-holdings'])))}
               className="text-xs text-emerald-700 hover:underline"
@@ -759,14 +785,84 @@ export function AccountsWealth() {
               {t('View holdings', language)}
             </button>
           </div>
+          {fundPortfolio.lowConfidence && (
+            <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+              {fundPortfolio.missingPriceCount > 0 && (
+                <div>{formatIssue('Fund holdings have no price for valuation.', fundPortfolio.missingPriceCount)}</div>
+              )}
+              {fundPortfolio.invalidTransactionCount > 0 && (
+                <div>{formatIssue('Fund transactions have missing fields or zero units.', fundPortfolio.invalidTransactionCount)}</div>
+              )}
+            </div>
+          )}
           <div className="text-2xl font-bold text-gray-900">
             {formatCurrency(adjustedFundAssetsTotal.value, state.settings.currency, locale)}
           </div>
-          <div className={`text-sm ${adjustedFundUnrealized.value >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {t('Unrealized P/L', language)}: {formatCurrency(adjustedFundUnrealized.value, state.settings.currency, locale)}
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
+            <div>
+              <div className="text-gray-400">{t('Cost Basis', language)}</div>
+              <div className="font-semibold text-gray-900">
+                {formatCurrency(adjustedFundCostBasis.value, state.settings.currency, locale)}
+              </div>
+            </div>
+            <div>
+              <div className="text-gray-400">{t('Unrealized P/L', language)}</div>
+              <div className={adjustedFundUnrealized.value >= 0 ? 'font-semibold text-green-600' : 'font-semibold text-red-600'}>
+                {formatCurrency(adjustedFundUnrealized.value, state.settings.currency, locale)}
+              </div>
+            </div>
+            <div>
+              <div className="text-gray-400">{t('Net Invested', language)}</div>
+              <div className="font-semibold text-gray-900">
+                {formatCurrency(fundPortfolio.netInvested, state.settings.currency, locale)}
+              </div>
+            </div>
+            <div>
+              <div className="text-gray-400">{t('Nominal Return', language)}</div>
+              <div className={`font-semibold ${fundPortfolio.nominalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {fundPortfolio.netInvested !== 0 ? `${(fundPortfolio.nominalReturn * 100).toFixed(1)}%` : 'â€”'}
+              </div>
+            </div>
           </div>
-          <div className="text-xs text-gray-500 mt-1">
-            {activeFundsCount} {t('active funds', language)}
+          <div className="mt-2 text-xs text-gray-500">
+            {activeFundsCount} {t('active funds', language)} Â· {t('Top holding', language)}:{' '}
+            {fundPortfolio.topHoldingPct > 0 ? `${fundPortfolio.topHoldingPct.toFixed(1)}%` : 'â€”'} Â· {t('Top 3 concentration', language)}:{' '}
+            {fundPortfolio.top3Pct > 0 ? `${fundPortfolio.top3Pct.toFixed(1)}%` : 'â€”'}
+          </div>
+          <div className="mt-2 text-[11px] text-gray-400">{t('Realized P/L (coming soon)', language)}</div>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div>
+              <div className="text-gray-400">{t('Allocation by Fund', language)}</div>
+              {fundPortfolio.allocationsByFund.length === 0 ? (
+                <div className="text-gray-500">{t('No fund holdings yet. Add a buy to start.', language)}</div>
+              ) : (
+                fundPortfolio.allocationsByFund.slice(0, 3).map(item => (
+                  <div key={item.fund} className="flex items-center justify-between text-gray-700">
+                    <span className="truncate">{item.fund}</span>
+                    <span className="font-semibold text-gray-900">{item.pct.toFixed(1)}%</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div>
+              <div className="text-gray-400">{t('Allocation by Account', language)}</div>
+              {fundPortfolio.allocationsByAccount.length === 0 ? (
+                <div className="text-gray-500">{t('No fund holdings yet. Add a buy to start.', language)}</div>
+              ) : (
+                fundPortfolio.allocationsByAccount.slice(0, 3).map(item => {
+                  const accountName = item.accountId ? accountById.get(item.accountId)?.name : t('Unassigned', language);
+                  return (
+                    <div key={item.accountId ?? 'unassigned'} className="flex items-center justify-between text-gray-700">
+                      <span className="truncate">{accountName}</span>
+                      <span className="font-semibold text-gray-900">{item.pct.toFixed(1)}%</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-gray-500">
+            {t('Allocation by Category', language)}: {t('Category allocation not available yet.', language)}
           </div>
         </div>
 
@@ -778,8 +874,51 @@ export function AccountsWealth() {
           <div className="text-sm text-gray-700">{t('Net Interest', language)}: {formatCurrency(activeNetInterestTotal, state.settings.currency, locale)}</div>
           <div className="text-sm text-gray-700">{t('Next Maturity', language)}: {nextMaturity || '-'}</div>
           <div className="text-xs text-gray-500 mt-1">
-            {t('Active', language)}: {activeDepositCount} • {t('Maturing in 7 days', language)}: {maturingIn7}
+            {t('Active', language)}: {activeDepositCount} â€¢ {t('Maturing in 7 days', language)}: {maturingIn7}
           </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div className="bg-white rounded-lg shadow p-5">
+          <div className="text-sm text-gray-500 mb-2">{t('Debt Summary', language)}</div>
+          <div className="text-2xl font-bold text-red-600">
+            {formatCurrency(debtSummary.totalDebt, state.settings.currency, locale)}
+          </div>
+          <div className="text-sm text-gray-700">
+            {t('Min. Payments', language)}: {formatCurrency(debtSummary.minimumPayments, state.settings.currency, locale)} {t('per month', language)}
+          </div>
+          <TransferAwareOutflowDetail
+            summary={transferAwareOutflow}
+            currency={state.settings.currency}
+            locale={locale}
+            language={language}
+            size="xs"
+          />
+          <div className="text-xs text-gray-500 mt-1">
+            {debtSummary.debtCount} {t('Debts', language)}
+          </div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-5">
+          <div className="text-sm text-gray-500 mb-2">{t('Portfolio Allocation', language)}</div>
+          {portfolioTotal > 0 ? (
+            <div className="space-y-2 text-sm">
+              {portfolioAllocation.slice(0, 4).map(item => {
+                const pct = portfolioTotal > 0 ? (item.value / portfolioTotal) * 100 : 0;
+                return (
+                  <div key={item.key} className="flex items-center justify-between text-gray-700">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
+                      <span>{item.name}</span>
+                    </div>
+                    <span className="font-semibold text-gray-900">{pct.toFixed(1)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-500">{t('No portfolio data yet. Add a holding to begin.', language)}</div>
+          )}
         </div>
       </div>
 
@@ -792,7 +931,7 @@ export function AccountsWealth() {
           </div>
           <div className="space-y-2">
             {assetAccounts.length === 0 ? (
-              <p className="text-gray-500 text-center py-8">{t('No accounts available.', language)}</p>
+              <p className="text-gray-500 text-center py-8">{t('No accounts yet. Add one to start tracking.', language)}</p>
             ) : (
               assetAccounts.map(account => {
                 const localBalance = getAccountLocalValue(account);
@@ -821,13 +960,13 @@ export function AccountsWealth() {
                         )}
                         {account.type === 'commodities' && (
                           <div className="text-xs text-gray-500">
-                            {t('Commodity', language)}: {account.commodityName || account.name} • {t('Units', language)}: {account.commodityUnits ?? 0} • {t('Mode', language)}: {t(account.commodityValuationMode === 'auto' ? 'Auto Fetch' : 'Manual', language)}
+                            {t('Commodity', language)}: {account.commodityName || account.name} â€¢ {t('Units', language)}: {account.commodityUnits ?? 0} â€¢ {t('Mode', language)}: {t(account.commodityValuationMode === 'auto' ? 'Auto Fetch' : 'Manual', language)}
                           </div>
                         )}
                         {account.type === 'pension' && (
                           <div className="text-xs text-gray-500">
                             {t('Fund Value', language)}: {formatCurrency(account.pensionFundValue ?? 0, state.settings.currency, locale)}
-                            {' • '}
+                            {' â€¢ '}
                             {t('Government Contribution', language)}: {formatCurrency(account.governmentContribution ?? 0, state.settings.currency, locale)}
                           </div>
                         )}
@@ -865,7 +1004,7 @@ export function AccountsWealth() {
                     </div>
                     {account.isForeignCurrency && account.currency && (
                       <div className="mt-1 text-xs text-gray-500">
-                        {formatLocalAmount(localBalance, account.currency)} • {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)} → {formatCurrency(derivedBalance, state.settings.currency, locale)}
+                        {formatLocalAmount(localBalance, account.currency)} â€¢ {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)} â†’ {formatCurrency(derivedBalance, state.settings.currency, locale)}
                       </div>
                     )}
                   </div>
@@ -879,7 +1018,7 @@ export function AccountsWealth() {
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">{t('Liability Accounts', language)}</h2>
           {liabilityCards.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">{t('No accounts available.', language)}</p>
+            <p className="text-gray-500 text-center py-8">{t('No accounts yet. Add one to start tracking.', language)}</p>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {liabilityCards.map(item => {
@@ -962,7 +1101,7 @@ export function AccountsWealth() {
                       </div>
                       {cardSummary && (
                         <div className="mt-2 text-xs text-gray-600">
-                          {t('Unpaid Statement', language)}: {formatCurrency(cardSummary.unpaidStatementBalance, state.settings.currency, locale)} â€¢ {t('Unbilled Spending', language)}: {formatCurrency(cardSummary.unbilledSpending, state.settings.currency, locale)}
+                          {t('Unpaid Statement', language)}: {formatCurrency(cardSummary.unpaidStatementBalance, state.settings.currency, locale)} Ã¢â‚¬Â¢ {t('Unbilled Spending', language)}: {formatCurrency(cardSummary.unbilledSpending, state.settings.currency, locale)}
                         </div>
                       )}
                       {isOpen && cardSummary && (
@@ -1105,7 +1244,7 @@ export function AccountsWealth() {
                     {institutionBreakdown.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
-                          {t('No data available.', language)}
+                          {t('No data available for this period.', language)}
                         </td>
                       </tr>
                     ) : (
@@ -1145,7 +1284,7 @@ export function AccountsWealth() {
                     {personBreakdown.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
-                          {t('No data available.', language)}
+                          {t('No data available for this period.', language)}
                         </td>
                       </tr>
                     ) : (
@@ -1199,7 +1338,7 @@ export function AccountsWealth() {
             <LineChart data={timelineData}>
               <XAxis dataKey="date" />
               <YAxis tickFormatter={(value: number) => formatCurrency(value, state.settings.currency, locale)} />
-              <Tooltip
+              <RechartsTooltip
                 formatter={(value: number) => formatCurrency(value, state.settings.currency, locale)}
               />
               <Legend />
@@ -1295,7 +1434,7 @@ export function AccountsWealth() {
                       {reconciliationAccounts.length === 0 ? (
                         <tr>
                           <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
-                            {t('No accounts available.', language)}
+                            {t('No accounts yet. Add one to start tracking.', language)}
                           </td>
                         </tr>
                       ) : (
@@ -1473,12 +1612,10 @@ export function AccountsWealth() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {t('Target Amount', language)} * ({state.settings.currency})
             </label>
-            <input
-              type="number"
-              value={goalFormData.targetAmount || ''}
-              onChange={(e) => setGoalFormData({ ...goalFormData, targetAmount: parseFloat(e.target.value) || 0 })}
+            <CurrencyInput
+              value={goalFormData.targetAmount}
+              onValueChange={(value) => setGoalFormData({ ...goalFormData, targetAmount: value })}
               placeholder="0.00"
-              step="0.01"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
           </div>
@@ -1487,22 +1624,20 @@ export function AccountsWealth() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {t('Current Amount', language)} ({state.settings.currency})
             </label>
-            <input
-              type="number"
-              value={goalFormData.currentAmount || ''}
-              onChange={(e) => setGoalFormData({ ...goalFormData, currentAmount: parseFloat(e.target.value) || 0 })}
+            <CurrencyInput
+              value={goalFormData.currentAmount}
+              onValueChange={(value) => setGoalFormData({ ...goalFormData, currentAmount: value })}
+              onEmptyValueChange={() => setGoalFormData({ ...goalFormData, currentAmount: undefined })}
               placeholder="0.00"
-              step="0.01"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">{t('Target Date (Optional)', language)}</label>
-            <input
-              type="date"
+            <SmartDateInput
               value={goalFormData.targetDate || ''}
-              onChange={(e) => setGoalFormData({ ...goalFormData, targetDate: e.target.value || undefined })}
+              onChange={(value) => setGoalFormData({ ...goalFormData, targetDate: value || undefined })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
           </div>
@@ -1532,7 +1667,7 @@ export function AccountsWealth() {
         <h2 className="text-xl font-semibold text-gray-900 mb-4">{t('Savings Goals Progress', language)}</h2>
         <div className="space-y-4">
           {state.savingsGoals.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">{t('No savings goals set yet', language)}</p>
+            <p className="text-gray-500 text-center py-8">{t('No savings goals yet. Add one to start.', language)}</p>
           ) : (
             state.savingsGoals.map(goal => {
               const progress = goal.targetAmount > 0 ? (goal.currentAmount / goal.targetAmount) * 100 : 0;
@@ -1582,7 +1717,7 @@ export function AccountsWealth() {
                         {remaining > 0 ? (
                       <span>{state.settings.currency}{remaining.toFixed(2)} {t('remaining to reach goal', language)}</span>
                     ) : (
-                      <span className="text-green-600 font-semibold">🎉 {t('Goal achieved!', language)}</span>
+                      <span className="text-green-600 font-semibold">ğŸ‰ {t('Goal achieved!', language)}</span>
                     )}
                   </div>
                 </div>
@@ -1610,10 +1745,9 @@ export function AccountsWealth() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">{t('Payment Date', language)} *</label>
-              <input
-                type="date"
+              <SmartDateInput
                 value={cardPaymentForm.date}
-                onChange={(e) => setCardPaymentForm({ ...cardPaymentForm, date: e.target.value })}
+                onChange={(value) => setCardPaymentForm({ ...cardPaymentForm, date: value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             </div>
@@ -1645,10 +1779,9 @@ export function AccountsWealth() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">{t('Amount', language)} * ({state.settings.currency})</label>
-              <input
-                type="number"
-                value={cardPaymentForm.amount || ''}
-                onChange={(e) => setCardPaymentForm({ ...cardPaymentForm, amount: parseFloat(e.target.value) || 0 })}
+              <CurrencyInput
+                value={cardPaymentForm.amount}
+                onValueChange={(value) => setCardPaymentForm({ ...cardPaymentForm, amount: value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             </div>
@@ -1750,23 +1883,17 @@ export function AccountsWealth() {
               <>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{t('Statement Day', language)} *</label>
-                  <input
-                    type="number"
-                    value={accountFormData.statementDay ?? ''}
-                    onChange={(e) => setAccountFormData({ ...accountFormData, statementDay: parseInt(e.target.value, 10) || 0 })}
-                    min={1}
-                    max={31}
+                  <UnitsInput
+                    value={accountFormData.statementDay}
+                    onValueChange={(value) => setAccountFormData({ ...accountFormData, statementDay: Math.max(0, Math.round(value)) })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{t('Due Day', language)} *</label>
-                  <input
-                    type="number"
-                    value={accountFormData.dueDay ?? ''}
-                    onChange={(e) => setAccountFormData({ ...accountFormData, dueDay: parseInt(e.target.value, 10) || 0 })}
-                    min={1}
-                    max={31}
+                  <UnitsInput
+                    value={accountFormData.dueDay}
+                    onValueChange={(value) => setAccountFormData({ ...accountFormData, dueDay: Math.max(0, Math.round(value)) })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   />
                 </div>
@@ -1774,25 +1901,23 @@ export function AccountsWealth() {
             )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">{t('Opening Balance', language)}</label>
-              <input
-                type="number"
-                value={accountFormData.openingBalance ?? ''}
-                onChange={(e) => setAccountFormData({ ...accountFormData, openingBalance: parseFloat(e.target.value) || 0 })}
+              <CurrencyInput
+                value={accountFormData.openingBalance}
+                onValueChange={(value) => setAccountFormData({ ...accountFormData, openingBalance: value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">{t('Current Balance', language)}</label>
-              <input
-                type="number"
+              <CurrencyInput
                 value={
                   accountFormData.type === 'pension'
                     ? pensionTotal
                     : (accountFormData.type === 'commodities' && accountFormData.commodityValuationMode === 'auto')
                       ? commodityPreviewValue
-                      : (accountFormData.currentBalance ?? '')
+                      : accountFormData.currentBalance
                 }
-                onChange={(e) => setAccountFormData({ ...accountFormData, currentBalance: parseFloat(e.target.value) || 0 })}
+                onValueChange={(value) => setAccountFormData({ ...accountFormData, currentBalance: value })}
                 disabled={accountFormData.type === 'pension' || (accountFormData.type === 'commodities' && accountFormData.commodityValuationMode === 'auto')}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
@@ -1801,19 +1926,17 @@ export function AccountsWealth() {
               <>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{t('Fund Value', language)}</label>
-                  <input
-                    type="number"
-                    value={accountFormData.pensionFundValue ?? ''}
-                    onChange={(e) => setAccountFormData({ ...accountFormData, pensionFundValue: parseFloat(e.target.value) || 0 })}
+                  <CurrencyInput
+                    value={accountFormData.pensionFundValue}
+                    onValueChange={(value) => setAccountFormData({ ...accountFormData, pensionFundValue: value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{t('Government Contribution', language)}</label>
-                  <input
-                    type="number"
-                    value={accountFormData.governmentContribution ?? ''}
-                    onChange={(e) => setAccountFormData({ ...accountFormData, governmentContribution: parseFloat(e.target.value) || 0 })}
+                  <CurrencyInput
+                    value={accountFormData.governmentContribution}
+                    onValueChange={(value) => setAccountFormData({ ...accountFormData, governmentContribution: value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   />
                 </div>
@@ -1833,11 +1956,9 @@ export function AccountsWealth() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{t('Units', language)}</label>
-                  <input
-                    type="number"
-                    value={accountFormData.commodityUnits ?? ''}
-                    onChange={(e) => setAccountFormData({ ...accountFormData, commodityUnits: parseFloat(e.target.value) || 0 })}
-                    step="0.0001"
+                  <UnitsInput
+                    value={accountFormData.commodityUnits}
+                    onValueChange={(value) => setAccountFormData({ ...accountFormData, commodityUnits: value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   />
                 </div>
@@ -1885,10 +2006,9 @@ export function AccountsWealth() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">{t('Exchange Rate', language)}</label>
-              <input
-                type="number"
-                value={accountFormData.exchangeRate ?? ''}
-                onChange={(e) => setAccountFormData({ ...accountFormData, exchangeRate: parseFloat(e.target.value) || 1 })}
+              <UnitsInput
+                value={accountFormData.exchangeRate}
+                onValueChange={(value) => setAccountFormData({ ...accountFormData, exchangeRate: value || 1 })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             </div>
@@ -1942,6 +2062,7 @@ export function AccountsWealth() {
     </div>
   );
 }
+
 
 
 

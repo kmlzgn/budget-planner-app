@@ -9,6 +9,7 @@ import {
 } from '../utils/budgetCalculations';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, parseISO, getDay } from 'date-fns';
 import { getMonthNames, getWeekdayNames, t } from '../utils/i18n';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
 
 export function MonthlyOverview() {
   const { state } = useBudget();
@@ -92,7 +93,10 @@ export function MonthlyOverview() {
       {/* Header with month selector */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Monthly Overview', language)}</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            {t('Monthly Overview', language)}
+            <BreadcrumbInline />
+          </h1>
           <p className="text-gray-600">{t('Track your planned vs actual budget performance', language)}</p>
         </div>
         <div className="flex items-center gap-2">

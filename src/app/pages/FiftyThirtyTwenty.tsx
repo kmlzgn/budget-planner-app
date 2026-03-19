@@ -2,6 +2,7 @@ import { useBudget } from '../context/BudgetContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { calculate503020 } from '../utils/budgetCalculations';
 import { TrendingUp, TrendingDown, Target } from 'lucide-react';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
 
 export function FiftyThirtyTwenty() {
   const { state } = useBudget();
@@ -35,7 +36,10 @@ export function FiftyThirtyTwenty() {
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">50/30/20 Budgeting Rule</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          50/30/20 Budgeting Rule
+          <BreadcrumbInline />
+        </h1>
         <p className="text-gray-600">Analyze your spending against the popular 50/30/20 budget framework</p>
       </div>
 

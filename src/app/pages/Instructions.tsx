@@ -1,4 +1,5 @@
 import { BookOpen, Settings, Repeat, FileText, Calendar, BarChart3, Wallet, CreditCard, PieChart } from 'lucide-react';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
 
 export function Instructions() {
   return (
@@ -6,7 +7,10 @@ export function Instructions() {
       <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg p-8">
         <div className="flex items-center gap-3 mb-4">
           <BookOpen className="w-10 h-10" />
-          <h1 className="text-3xl font-bold">Welcome to Your Annual Budget Planner</h1>
+          <h1 className="text-3xl font-bold">
+            Welcome to Your Annual Budget Planner
+            <BreadcrumbInline />
+          </h1>
         </div>
         <p className="text-emerald-50">
           A comprehensive tool to manage your finances, track expenses, and achieve your financial goals throughout 2026.

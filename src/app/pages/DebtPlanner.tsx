@@ -6,6 +6,10 @@ import { generateId } from '../utils/id';
 import { buildDebtInstallments, calculateDebtPayoffTimeline, calculateInstallmentAmount } from '../utils/budgetCalculations';
 import { formatDateDisplay, t } from '../utils/i18n';
 import { formatCurrency } from '../utils/formatting';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
+import { CurrencyInput, PercentInput } from '../components/inputs/NumberInput';
+import { getMonthlyCashFlowSummary, getDebtSummary } from '../utils/financeSummaries';
+import { getDebtDecisionSummary } from '../utils/debtSummaries';
 
 export function DebtPlanner() {
   const { state, addDebt, updateDebt, deleteDebt, addTransaction, deleteTransaction } = useBudget();
@@ -331,15 +335,40 @@ export function DebtPlanner() {
     };
   });
   const payoffTimeline = calculateDebtPayoffTimeline(debtsForTimeline, strategy, extraPayment);
-  const totalDebt = debtsForTimeline.reduce((sum, d) => sum + d.currentBalance, 0);
-  const totalMinimumPayments = debtsForTimeline.reduce((sum, d) => sum + d.minimumPayment, 0);
-  const totalInterestPaid = payoffTimeline.reduce((sum, t) => sum + t.totalInterest, 0);
-  const monthsToDebtFree = Math.max(...payoffTimeline.map(t => t.monthsToPayoff));
+  const decisionSummary = getDebtDecisionSummary(state.debts, strategy, extraPayment);
+  const totalDebt = decisionSummary.totalDebt;
+  const totalMinimumPayments = decisionSummary.totalMinimumPayments;
+  const totalInterestPaid = decisionSummary.totalInterestEstimate;
+  const monthsToDebtFree = decisionSummary.monthsToDebtFree;
+  const today = new Date();
+  const cashFlow = getMonthlyCashFlowSummary(
+    state.transactions,
+    state.recurringTransactions,
+    today.getFullYear(),
+    today.getMonth()
+  );
+  const debtSummary = getDebtSummary(state.debts, cashFlow.actualIncome);
+  const urgencyFlags: string[] = [];
+  if (decisionSummary.missingPaymentCount > 0) {
+    urgencyFlags.push(t('Minimum payments missing for some debts.', language));
+  }
+  if (decisionSummary.missingRatesCount > 0) {
+    urgencyFlags.push(t('Interest rates missing for some debts.', language));
+  }
+  if (debtSummary.debtRatio !== null && debtSummary.debtRatio >= 30) {
+    urgencyFlags.push(t('Debt payments high vs income', language));
+  }
+  if (monthsToDebtFree >= 120) {
+    urgencyFlags.push(t('Long payoff horizon (10+ years).', language));
+  }
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Debt Planner', language)}</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          {t('Debt Planner', language)}
+          <BreadcrumbInline />
+        </h1>
         <p className="text-gray-600">{t('Strategize your debt payoff using Snowball or Avalanche method', language)}</p>
       </div>
 
@@ -359,19 +388,29 @@ export function DebtPlanner() {
         </div>
 
         <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-sm text-gray-600 mb-1">{t('Min. Payments', language)}</div>
+          <div className="text-sm text-gray-600 mb-1">{t('Monthly Obligation', language)}</div>
           <div className="text-2xl font-bold text-gray-900">
             {formatMoneyValue(totalMinimumPayments)}
           </div>
           <div className="text-sm text-gray-600 mt-1">{t('per month', language)}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            {debtSummary.debtRatio !== null
+              ? `${t('Debt-to-Income', language)}: ${debtSummary.debtRatio.toFixed(1)}%`
+              : t('Add income data to calculate burden.', language)}
+          </div>
         </div>
 
         <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-sm text-gray-600 mb-1">{t('Est. Interest', language)}</div>
+          <div className="text-sm text-gray-600 mb-1">{t('Remaining Interest Estimate', language)}</div>
           <div className="text-2xl font-bold text-orange-600">
             {formatMoneyValue(totalInterestPaid)}
           </div>
           <div className="text-sm text-gray-600 mt-1">{t('total paid', language)}</div>
+          {decisionSummary.missingRatesCount > 0 && (
+            <div className="text-xs text-amber-700 mt-1">
+              {t('Some interest rates are missing; estimate is low confidence.', language)}
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-lg shadow p-6">
@@ -382,6 +421,78 @@ export function DebtPlanner() {
           <div className="text-sm text-gray-600 mt-1">
             {monthsToDebtFree < 500 ? `${(monthsToDebtFree / 12).toFixed(1)} ${t('years', language)}` : t('Never', language)}
           </div>
+          {extraPayment > 0 && decisionSummary.monthsSaved > 0 && (
+            <div className="text-xs text-emerald-700 mt-1">
+              {t('Extra payment saves', language)} {decisionSummary.monthsSaved} {t('months', language)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Decision Insights */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="bg-white rounded-lg shadow p-5">
+          <div className="text-sm text-gray-500 mb-2">{t('Payoff Order', language)}</div>
+          <div className="text-xs text-gray-500 mb-3">
+            {strategy === 'snowball'
+              ? t('Smallest balances first for momentum.', language)
+              : t('Highest interest rates first to save more.', language)}
+          </div>
+          <div className="space-y-2 text-sm">
+            {decisionSummary.payoffOrder.length === 0 ? (
+              <div className="text-gray-500">{t('No debts added yet. Add your first debt above!', language)}</div>
+            ) : (
+              decisionSummary.payoffOrder.slice(0, 3).map((debt, index) => (
+                <div key={debt.id} className="flex items-center justify-between text-gray-700">
+                  <div className="truncate">
+                    {index + 1}. {debt.name}
+                  </div>
+                  <div className="text-gray-500">
+                    {strategy === 'snowball'
+                      ? formatMoneyValue(debt.currentBalance)
+                      : `${(debt.interestRate ?? 0).toFixed(2)}%`}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-5">
+          <div className="text-sm text-gray-500 mb-2">{t('Early Payment Impact', language)}</div>
+          {extraPayment > 0 ? (
+            <div className="space-y-2 text-sm text-gray-700">
+              <div>
+                {t('Extra payment', language)}: {formatMoneyValue(extraPayment)}
+              </div>
+              <div className="text-emerald-700">
+                {t('Interest saved estimate', language)}: {formatMoneyValue(decisionSummary.interestSaved)}
+              </div>
+              <div>
+                {t('Time saved', language)}: {decisionSummary.monthsSaved} {t('months', language)}
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-gray-500">
+              {t('Add an extra payment to preview payoff impact.', language)}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-5">
+          <div className="text-sm text-gray-500 mb-2">{t('Urgency Flags', language)}</div>
+          {urgencyFlags.length === 0 ? (
+            <div className="text-sm text-gray-500">{t('No urgent items right now.', language)}</div>
+          ) : (
+            <ul className="space-y-2 text-sm text-gray-700">
+              {urgencyFlags.map(flag => (
+                <li key={flag} className="flex items-start gap-2">
+                  <span className="mt-1 h-2 w-2 rounded-full bg-rose-500" />
+                  <span>{flag}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 
@@ -407,17 +518,17 @@ export function DebtPlanner() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {t('Total Amount', language)} * ({state.settings.currency})
             </label>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={getInputValue('totalAmount', formData.totalAmount ?? 0, formatMoneyValue)}
+            <CurrencyInput
+              value={formData.totalAmount ?? 0}
+              valueText={getInputValue('totalAmount', formData.totalAmount ?? 0, formatMoneyValue)}
+              onValueTextChange={(value) => {
+                const formatted = formatMoneyTyping(value);
+                setInputValue('totalAmount', formatted);
+              }}
+              parseValue={parseLocaleNumber}
+              onValueChange={(value) => setFormData({ ...formData, totalAmount: value })}
               onFocus={() => setInputValue('totalAmount', formatMoneyTyping(getInputValue('totalAmount', formData.totalAmount ?? 0, formatMoneyValue)))}
               onBlur={() => setInputValue('totalAmount', normalizeMoneyOnBlur(formData.totalAmount ?? 0))}
-              onChange={(e) => {
-                const formatted = formatMoneyTyping(e.target.value);
-                setInputValue('totalAmount', formatted);
-                setFormData({ ...formData, totalAmount: parseLocaleNumber(e.target.value) });
-              }}
               placeholder={formatMoneyValue(0)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
@@ -427,17 +538,17 @@ export function DebtPlanner() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {t('Current Balance', language)} * ({state.settings.currency})
             </label>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={getInputValue('currentBalance', formData.currentBalance ?? 0, formatMoneyValue)}
+            <CurrencyInput
+              value={formData.currentBalance ?? 0}
+              valueText={getInputValue('currentBalance', formData.currentBalance ?? 0, formatMoneyValue)}
+              onValueTextChange={(value) => {
+                const formatted = formatMoneyTyping(value);
+                setInputValue('currentBalance', formatted);
+              }}
+              parseValue={parseLocaleNumber}
+              onValueChange={(value) => setFormData({ ...formData, currentBalance: value })}
               onFocus={() => setInputValue('currentBalance', formatMoneyTyping(getInputValue('currentBalance', formData.currentBalance ?? 0, formatMoneyValue)))}
               onBlur={() => setInputValue('currentBalance', normalizeMoneyOnBlur(formData.currentBalance ?? 0))}
-              onChange={(e) => {
-                const formatted = formatMoneyTyping(e.target.value);
-                setInputValue('currentBalance', formatted);
-                setFormData({ ...formData, currentBalance: parseLocaleNumber(e.target.value) });
-              }}
               placeholder={formatMoneyValue(0)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
@@ -445,17 +556,17 @@ export function DebtPlanner() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">{t('Monthly Interest Rate (%)', language)} *</label>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={monthlyInterestRateInput}
-              onFocus={() => setMonthlyInterestRateInput(monthlyRateValue ? String(monthlyRateValue) : '')}
-              onBlur={() => setMonthlyInterestRateInput(normalizeRateOnBlur(monthlyRateValue))}
-              onChange={(e) => {
-                const raw = e.target.value.replace(/[^\d.,-]/g, '');
+            <PercentInput
+              value={monthlyRateValue}
+              valueText={monthlyInterestRateInput}
+              onValueTextChange={(value) => {
+                const raw = value.replace(/[^\d.,-]/g, '');
                 const normalized = locale.startsWith('tr') ? raw.replace(/\./g, ',') : raw;
                 setMonthlyInterestRateInput(normalized);
               }}
+              onValueChange={() => {}}
+              onFocus={() => setMonthlyInterestRateInput(monthlyRateValue ? String(monthlyRateValue) : '')}
+              onBlur={() => setMonthlyInterestRateInput(normalizeRateOnBlur(monthlyRateValue))}
               placeholder={formatRateValue(0)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
@@ -465,17 +576,17 @@ export function DebtPlanner() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {t('Min. Payment', language)} ({state.settings.currency})
             </label>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={getInputValue('minimumPayment', formData.minimumPayment ?? 0, formatMoneyValue)}
+            <CurrencyInput
+              value={formData.minimumPayment ?? 0}
+              valueText={getInputValue('minimumPayment', formData.minimumPayment ?? 0, formatMoneyValue)}
+              onValueTextChange={(value) => {
+                const formatted = formatMoneyTyping(value);
+                setInputValue('minimumPayment', formatted);
+              }}
+              parseValue={parseLocaleNumber}
+              onValueChange={(value) => setFormData({ ...formData, minimumPayment: value })}
               onFocus={() => setInputValue('minimumPayment', formatMoneyTyping(getInputValue('minimumPayment', formData.minimumPayment ?? 0, formatMoneyValue)))}
               onBlur={() => setInputValue('minimumPayment', normalizeMoneyOnBlur(formData.minimumPayment ?? 0))}
-              onChange={(e) => {
-                const formatted = formatMoneyTyping(e.target.value);
-                setInputValue('minimumPayment', formatted);
-                setFormData({ ...formData, minimumPayment: parseLocaleNumber(e.target.value) });
-              }}
               placeholder={formatMoneyValue(0)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />

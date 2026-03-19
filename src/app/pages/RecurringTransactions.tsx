@@ -6,6 +6,7 @@ import { generateId } from '../utils/id';
 import { differenceInCalendarDays, format, parseISO } from 'date-fns';
 import { formatDateDisplay, t } from '../utils/i18n';
 import { formatCurrency } from '../utils/formatting';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
 
 export function RecurringTransactions() {
   const { state, addRecurringTransaction, updateRecurringTransaction, deleteRecurringTransaction } = useBudget();
@@ -191,7 +192,10 @@ export function RecurringTransactions() {
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Recurring Transactions', language)}</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          {t('Recurring Transactions', language)}
+          <BreadcrumbInline />
+        </h1>
         <p className="text-gray-600">{t('Manage automatic income, bills, subscriptions, and scheduled payments', language)}</p>
       </div>   
 

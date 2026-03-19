@@ -1,0 +1,21 @@
+@layer components {
+  .app-page {
+    @apply max-w-7xl mx-auto p-6 space-y-6;
+  }
+
+  .app-page-header {
+    @apply flex flex-wrap items-center justify-between gap-4;
+  }
+
+  .app-page-title {
+    @apply text-3xl font-bold text-gray-900;
+  }
+
+  .app-card {
+    @apply bg-white rounded-2xl border border-gray-100 shadow-sm;
+  }
+
+  .app-card-padding {
+    @apply p-6;
+  }
+}

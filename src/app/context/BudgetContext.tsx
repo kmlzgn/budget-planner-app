@@ -366,37 +366,47 @@ const inferClassification = (category: Pick<Category, 'name' | 'type'>): Categor
   return 'wants';
 };
 
+const coerceBudgetState = (raw: Partial<BudgetState>): BudgetState => ({
+  schemaVersion: Number.isFinite(raw.schemaVersion) ? (raw.schemaVersion as number) : CURRENT_SCHEMA_VERSION,
+  settings: { ...initialState.settings, ...(raw.settings ?? {}) },
+  categories: Array.isArray(raw.categories) ? raw.categories : initialState.categories,
+  recurringTransactions: Array.isArray(raw.recurringTransactions) ? raw.recurringTransactions : [],
+  transactions: Array.isArray(raw.transactions) ? raw.transactions : [],
+  fundTransactions: Array.isArray(raw.fundTransactions) ? raw.fundTransactions : [],
+  fundHoldingsMeta: Array.isArray(raw.fundHoldingsMeta) ? raw.fundHoldingsMeta : [],
+  marketData: raw.marketData ?? { fxRates: [], commodities: [] },
+  deposits: Array.isArray(raw.deposits) ? raw.deposits : [],
+  wealthSnapshots: Array.isArray(raw.wealthSnapshots) ? raw.wealthSnapshots : [],
+  accounts: Array.isArray(raw.accounts) ? raw.accounts : [],
+  debts: Array.isArray(raw.debts) ? raw.debts : [],
+  savingsGoals: Array.isArray(raw.savingsGoals) ? raw.savingsGoals : [],
+});
+
 const migrateBudgetData = (data: unknown): BudgetState | null => {
   if (!data || typeof data !== 'object') return null;
 
   const raw = data as Partial<BudgetState>;
   const version = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0;
+  const baseState = coerceBudgetState(raw);
 
   if (version === CURRENT_SCHEMA_VERSION) {
-    const withClassification = (raw as BudgetState);
-    return sanitizeBudgetState(withClassification);
+    return sanitizeBudgetState({ ...baseState, schemaVersion: CURRENT_SCHEMA_VERSION });
   }
 
-  if (version === 0 || version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8) {
-    const rawState = raw as BudgetState;
-    const categories = (rawState.categories || []).map(cat => ({
+  if (version >= 0 && version <= 8) {
+    const categories = baseState.categories.map(cat => ({
       ...cat,
       classification: cat.classification ?? inferClassification(cat),
     }));
 
     return sanitizeBudgetState({
-      ...rawState,
+      ...baseState,
       settings: {
-        ...rawState.settings,
-        language: rawState.settings?.language ?? 'en',
+        ...baseState.settings,
+        language: baseState.settings?.language ?? 'en',
       },
       schemaVersion: CURRENT_SCHEMA_VERSION,
       categories,
-      fundTransactions: rawState.fundTransactions ?? [],
-      fundHoldingsMeta: rawState.fundHoldingsMeta ?? [],
-      marketData: rawState.marketData ?? { fxRates: [], commodities: [] },
-      deposits: rawState.deposits ?? [],
-      wealthSnapshots: rawState.wealthSnapshots ?? [],
     });
   }
 
@@ -429,7 +439,11 @@ export const BudgetProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   });
 
   useEffect(() => {
-    localStorage.setItem('budgetPlannerData', JSON.stringify(state));
+    try {
+      localStorage.setItem('budgetPlannerData', JSON.stringify(state));
+    } catch (error) {
+      console.error('Failed to persist budget data', error);
+    }
   }, [state]);
 
   const updateSettings = (settings: Partial<Settings>) => {

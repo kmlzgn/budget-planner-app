@@ -26,17 +26,20 @@ import {
   useSidebar,
 } from './ui/sidebar';
 
-const navItems = [
-  { path: '/', label: 'Instructions', icon: HelpOutlineIcon },
-  { path: '/setup', label: 'Setup', icon: SettingsIcon },
-  { path: '/recurring', label: 'Recurring Transactions', icon: RepeatIcon },
-  { path: '/transactions', label: 'Transaction Log', icon: ReceiptLongIcon },
-  { path: '/monthly', label: 'Monthly Overview', icon: CalendarMonthIcon },
-  { path: '/dashboard', label: 'Annual Dashboard', icon: BarChartIcon },
-  { path: '/accounts', label: 'Accounts & Wealth', icon: AccountBalanceWalletIcon },
-  { path: '/market', label: 'Market Data', icon: ShowChartIcon },
-  { path: '/debt', label: 'Debt Planner', icon: CreditCardIcon },
-  { path: '/503020', label: '50/30/20 Rule', icon: PieChartIcon },
+const primaryNavItems = [
+  { path: '/overview', label: 'Overview', icon: BarChartIcon },
+  { path: '/cash-flow', label: 'Cash Flow', icon: CalendarMonthIcon },
+  { path: '/net-worth', label: 'Net Worth', icon: AccountBalanceWalletIcon },
+  { path: '/portfolio', label: 'Portfolio', icon: ShowChartIcon },
+  { path: '/debt', label: 'Debt', icon: CreditCardIcon },
+  { path: '/planning', label: 'Planning', icon: PieChartIcon },
+  { path: '/settings', label: 'Settings', icon: SettingsIcon },
+];
+
+const secondaryNavItems = [
+  { path: '/tools/instructions', label: 'Instructions', icon: HelpOutlineIcon },
+  { path: '/tools/transactions', label: 'Transaction Log', icon: ReceiptLongIcon },
+  { path: '/tools/recurring', label: 'Recurring Transactions', icon: RepeatIcon },
 ];
 
 export function Navigation() {
@@ -44,6 +47,23 @@ export function Navigation() {
   const { state } = useBudget();
   const language = state.settings.language;
   const { state: sidebarState, toggleSidebar } = useSidebar();
+  const normalizedPath = location.pathname.replace(/\/+$/, '') || '/';
+  const redirectMap: Record<string, string> = {
+    '/dashboard': '/overview',
+    '/monthly': '/cash-flow',
+    '/accounts': '/net-worth',
+    '/market': '/portfolio',
+    '/503020': '/planning',
+    '/setup': '/settings',
+    '/tools': '/tools/instructions',
+    '/tools/instructions': '/tools/instructions',
+    '/tools/transactions': '/tools/transactions',
+    '/tools/recurring': '/tools/recurring',
+    '/': '/tools/instructions',
+    '/transactions': '/tools/transactions',
+    '/recurring': '/tools/recurring',
+  };
+  const activePath = redirectMap[normalizedPath] ?? normalizedPath;
 
   return (
     <Sidebar collapsible="icon">
@@ -70,9 +90,33 @@ export function Navigation() {
       </SidebarHeader>
       <SidebarContent className="overflow-x-hidden">
         <SidebarMenu>
-          {navItems.map((item) => {
+          <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {t('Core', language)}
+          </div>
+          {primaryNavItems.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            const isActive = activePath === item.path;
+            return (
+              <SidebarMenuItem key={item.path}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={isActive}
+                  tooltip={t(item.label, language)}
+                >
+                  <Link to={item.path}>
+                    <Icon className="h-4 w-4" />
+                    <span>{t(item.label, language)}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
+          <div className="px-3 pt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {t('Tools', language)}
+          </div>
+          {secondaryNavItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = activePath === item.path;
             return (
               <SidebarMenuItem key={item.path}>
                 <SidebarMenuButton

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useBudget } from '../context/BudgetContext';
 import { t } from '../utils/i18n';
+import { BreadcrumbInline } from '../components/BreadcrumbInline';
+import { PercentInput, UnitsInput } from '../components/inputs/NumberInput';
 
 export function MarketData() {
   const { state, upsertFxRate, upsertCommodityPrice, upsertFundHoldingMeta } = useBudget();
@@ -123,7 +125,10 @@ export function MarketData() {
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Market Data', language)}</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          {t('Market Data', language)}
+          <BreadcrumbInline />
+        </h1>
         <p className="text-gray-600">{t('Manage FX rates, fund prices, and commodities.', language)}</p>
       </div>
 
@@ -148,11 +153,9 @@ export function MarketData() {
             placeholder="USD/TRY"
             className="px-3 py-2 border border-gray-300 rounded-lg"
           />
-          <input
-            type="number"
-            value={newFxRate || ''}
-            onChange={(e) => setNewFxRate(parseFloat(e.target.value) || 0)}
-            step="0.0001"
+          <UnitsInput
+            value={newFxRate || 0}
+            onValueChange={(value) => setNewFxRate(value)}
             placeholder="0.0000"
             className="px-3 py-2 border border-gray-300 rounded-lg"
           />
@@ -192,11 +195,11 @@ export function MarketData() {
                   <tr key={rate.pair}>
                     <td className="px-3 py-2">{rate.pair}</td>
                     <td className="px-3 py-2 text-right">
-                      <input
-                        type="number"
+                      <UnitsInput
                         value={rate.rate}
-                        onChange={(e) => upsertFxRate(rate.pair, { rate: parseFloat(e.target.value) || 0, updatedAt: new Date().toISOString() })}
-                        step="0.0001"
+                        onValueChange={(value) =>
+                          upsertFxRate(rate.pair, { rate: value, updatedAt: new Date().toISOString() })
+                        }
                         disabled={rate.mode === 'auto'}
                         className="w-24 px-2 py-1 border border-gray-300 rounded text-right"
                       />
@@ -293,11 +296,9 @@ export function MarketData() {
             placeholder={t('Commodity', language)}
             className="px-3 py-2 border border-gray-300 rounded-lg"
           />
-          <input
-            type="number"
-            value={newCommodityPrice || ''}
-            onChange={(e) => setNewCommodityPrice(parseFloat(e.target.value) || 0)}
-            step="0.01"
+          <UnitsInput
+            value={newCommodityPrice || 0}
+            onValueChange={(value) => setNewCommodityPrice(value)}
             placeholder="0.00"
             className="px-3 py-2 border border-gray-300 rounded-lg"
           />
@@ -337,11 +338,11 @@ export function MarketData() {
                   <tr key={item.commodity}>
                     <td className="px-3 py-2">{item.commodity}</td>
                     <td className="px-3 py-2 text-right">
-                      <input
-                        type="number"
+                      <UnitsInput
                         value={item.price}
-                        onChange={(e) => upsertCommodityPrice(item.commodity, { price: parseFloat(e.target.value) || 0, updatedAt: new Date().toISOString() })}
-                        step="0.01"
+                        onValueChange={(value) =>
+                          upsertCommodityPrice(item.commodity, { price: value, updatedAt: new Date().toISOString() })
+                        }
                         disabled={item.mode === 'auto'}
                         className="w-24 px-2 py-1 border border-gray-300 rounded text-right"
                       />
