@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useBudget } from '../context/BudgetContext';
 import { Plus, Trash2, Edit2, Check, X, Download, Upload } from 'lucide-react';
@@ -10,7 +10,7 @@ import { UnitsInput } from '../components/inputs/NumberInput';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { BreadcrumbInline } from '../components/BreadcrumbInline';
 
-const currencies = ['$', '€', '£', '¥', '₹', 'R$', 'A$', 'C$', 'CHF', 'kr', 'zł', '₺'];
+const currencies = ['$', 'â‚¬', 'Â£', 'Â¥', 'â‚¹', 'R$', 'A$', 'C$', 'CHF', 'kr', 'zÅ‚', 'â‚º'];
 export function Setup() {
   const {
     state,
@@ -330,7 +330,7 @@ export function Setup() {
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-  const filterValidRows = <T>(
+  const filterValidRows = <T,>(
     rows: unknown,
     isValid: (row: Record<string, unknown>) => row is T
   ): { valid: T[]; invalid: number } => {
@@ -1246,3 +1246,4 @@ export function Setup() {
     </div>
   );
 }
+
