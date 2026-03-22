@@ -1,319 +1,299 @@
+import { useMemo } from 'react';
 import { useBudget } from '../context/BudgetContext';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { calculate503020 } from '../utils/budgetCalculations';
-import { TrendingUp, TrendingDown, Target } from 'lucide-react';
 import { BreadcrumbInline } from '../components/BreadcrumbInline';
+import { AppCard } from '../components/ui/app-card';
+import { SectionHeader } from '../components/ui/section-header';
+import { InlineEmptyState } from '../components/ui/inline-empty-state';
+import { InlineWarningCallout } from '../components/ui/inline-warning-callout';
+import { formatCurrency } from '../utils/formatting';
+import { t, tKey } from '../utils/i18n';
+import { getPlanningSummary, PlanningBucketSummary } from '../utils/planningInsights';
+
+const bucketColors: Record<string, string> = {
+  needs: 'bg-rose-500',
+  wants: 'bg-amber-500',
+  savings: 'bg-emerald-500',
+};
+
+const bucketLight: Record<string, string> = {
+  needs: 'bg-rose-50 text-rose-700',
+  wants: 'bg-amber-50 text-amber-700',
+  savings: 'bg-emerald-50 text-emerald-700',
+};
+
+const bucketBorder: Record<string, string> = {
+  needs: 'border-rose-200',
+  wants: 'border-amber-200',
+  savings: 'border-emerald-200',
+};
+
+const statusTone = (status: PlanningBucketSummary['status']) => {
+  switch (status) {
+    case 'on_target':
+      return 'text-emerald-700';
+    case 'materially_over':
+    case 'over_target':
+      return 'text-rose-700';
+    case 'materially_under':
+    case 'under_target':
+      return 'text-amber-700';
+    default:
+      return 'text-gray-500';
+  }
+};
 
 export function FiftyThirtyTwenty() {
   const { state } = useBudget();
+  const language = state.settings.language;
+  const locale = language === 'tr' ? 'tr-TR' : 'en-US';
+  const summary = useMemo(
+    () => getPlanningSummary(state.transactions, state.categories),
+    [state.transactions, state.categories]
+  );
 
-  const totalIncome = state.transactions
-    .filter(t => t.type === 'income' && t.transactionKind !== 'credit-card-payment')
-    .reduce((sum, t) => sum + t.amount, 0);
+  const formatMoney = (value: number) =>
+    formatCurrency(value, state.settings.currency, locale, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+      hideDecimalsThreshold: 0,
+    });
 
-  const breakdown = calculate503020(state.transactions, state.categories);
+  const hasIncome = summary.incomeTotal > 0;
+  const wantsOver = summary.buckets.wants.gapAmount && summary.buckets.wants.gapAmount > 0;
+  const savingsUnder = summary.buckets.savings.gapAmount && summary.buckets.savings.gapAmount < 0;
 
-  const idealNeeds = totalIncome * 0.5;
-  const idealWants = totalIncome * 0.3;
-  const idealSavings = totalIncome * 0.2;
+  const summaryLine = useMemo(() => {
+    if (!hasIncome) {
+      return t('Add income transactions to unlock accurate planning insights.', language);
+    }
+    if (summary.dataQuality.lowNeedsSignal || summary.dataQuality.highWantsSignal) {
+      return t('Results may be distorted by category assignments.', language);
+    }
+    if (wantsOver && savingsUnder) {
+      return t('Wants are materially above target and savings are below target.', language);
+    }
+    if (summary.buckets.savings.status === 'on_target') {
+      return t('Your allocation is close to target with only minor adjustments needed.', language);
+    }
+    return t('Your allocation has clear gaps versus the 50/30/20 targets.', language);
+  }, [hasIncome, language, savingsUnder, summary.dataQuality.highWantsSignal, summary.dataQuality.lowNeedsSignal, summary.buckets.savings.status, wantsOver]);
 
-  const needsVariance = breakdown.needs - idealNeeds;
-  const wantsVariance = breakdown.wants - idealWants;
-  const savingsVariance = breakdown.savings - idealSavings;
+  const analysisContext = `${t('Period', language)}: ${t('All time', language)} � ${t('Based on categorized transactions', language)}`;
 
-  const chartData = [
-    { name: 'Needs', value: breakdown.needs, color: '#ef4444', ideal: 50 },
-    { name: 'Wants', value: breakdown.wants, color: '#f59e0b', ideal: 30 },
-    { name: 'Savings', value: breakdown.savings, color: '#10b981', ideal: 20 },
-  ];
+  const renderBucketCard = (bucket: PlanningBucketSummary) => {
+    const gap = bucket.gapAmount ?? 0;
+    const gapLabel = bucket.gapAmount === null
+      ? t('No target comparison', language)
+      : gap > 0
+        ? `${t('Over target by', language)} ${formatMoney(gap)}`
+        : `${t('Under target by', language)} ${formatMoney(Math.abs(gap))}`;
 
-  const idealChartData = [
-    { name: 'Needs (50%)', value: 50, color: '#ef4444' },
-    { name: 'Wants (30%)', value: 30, color: '#f59e0b' },
-    { name: 'Savings (20%)', value: 20, color: '#10b981' },
-  ];
+    return (
+      <div className={`rounded-lg border ${bucketBorder[bucket.key]} p-4 ${bucketLight[bucket.key]}`}>
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold">{t(bucket.label, language)}</div>
+          <div className={`text-xs ${statusTone(bucket.status)}`}>{t(bucket.status.replace('_', ' '), language)}</div>
+        </div>
+        <div className="mt-3 text-2xl font-semibold text-gray-900">
+          {bucket.actualPercent !== null ? `${bucket.actualPercent.toFixed(1)}%` : '--'}
+        </div>
+        <div className="text-sm text-gray-600">
+          {bucket.actualAmount > 0 ? formatMoney(bucket.actualAmount) : t('No activity', language)}
+        </div>
+        <div className="mt-3 text-xs text-gray-600">
+          {t('Target', language)}: {bucket.targetAmount !== null ? formatMoney(bucket.targetAmount) : '--'} ({bucket.targetPercent}%)
+        </div>
+        <div className={`text-xs mt-1 ${statusTone(bucket.status)}`}>{gapLabel}</div>
+      </div>
+    );
+  };
+
+  const renderStack = (values: Array<{ key: PlanningBucketSummary['key']; percent: number }>) => (
+    <div className="flex h-3 overflow-hidden rounded-full bg-gray-100">
+      {values.map(value => (
+        <div key={value.key} className={bucketColors[value.key]} style={{ width: `${value.percent}%` }} />
+      ))}
+    </div>
+  );
+
+  const driverBuckets = (['needs', 'wants', 'savings'] as PlanningBucketSummary['key'][])
+    .filter(key => summary.buckets[key].drivers.length > 0);
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          50/30/20 Budgeting Rule
-          <BreadcrumbInline />
-        </h1>
-        <p className="text-gray-600">Analyze your spending against the popular 50/30/20 budget framework</p>
-      </div>
-
-      {/* Rule Explanation */}
-      <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-lg p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-3">What is the 50/30/20 Rule?</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="p-4 bg-white rounded-lg border-l-4 border-red-500">
-            <div className="font-semibold text-lg text-red-600 mb-1">50% Needs</div>
-            <p className="text-gray-600">
-              Essential expenses like housing, utilities, groceries, transportation, healthcare, and minimum debt payments.
-            </p>
-          </div>
-          <div className="p-4 bg-white rounded-lg border-l-4 border-orange-500">
-            <div className="font-semibold text-lg text-orange-600 mb-1">30% Wants</div>
-            <p className="text-gray-600">
-              Discretionary spending on entertainment, dining out, hobbies, subscriptions, and other non-essentials.
-            </p>
-          </div>
-          <div className="p-4 bg-white rounded-lg border-l-4 border-green-500">
-            <div className="font-semibold text-lg text-green-600 mb-1">20% Savings</div>
-            <p className="text-gray-600">
-              Financial goals including emergency fund, retirement savings, investments, and extra debt payments.
-            </p>
-          </div>
+    <div className="app-page">
+      <div className="app-page-header">
+        <div>
+          <h1 className="app-page-title mb-2">
+            {tKey('Planning', language)}
+            <BreadcrumbInline />
+          </h1>
+          <p className="app-page-subtitle">{tKey('Analyze your spending against the popular 50/30/20 budget framework', language)}</p>
+          <div className="mt-3 text-sm text-gray-600">{summaryLine}</div>
+          <div className="mt-2 text-xs text-gray-500">{analysisContext}</div>
         </div>
       </div>
 
-      {/* Income Summary */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Income</h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="p-4 bg-blue-50 rounded-lg">
-            <div className="text-sm text-blue-600 mb-1">Total Income</div>
-            <div className="text-2xl font-bold text-blue-700">
-              {state.settings.currency}{totalIncome.toFixed(2)}
-            </div>
+      <AppCard>
+        <SectionHeader title={t('50/30/20 Rule', language)} subtitle={t('A lightweight guideline for balanced spending.', language)} />
+        <div className="mt-4 grid gap-3 md:grid-cols-3 text-sm">
+          <div className="rounded-lg border border-rose-200 bg-rose-50 p-3">
+            <div className="font-semibold text-rose-700">50% {t('Needs', language)}</div>
+            <div className="text-xs text-gray-600">{t('Essentials like housing, utilities, and debt minimums.', language)}</div>
           </div>
-          <div className="p-4 bg-red-50 rounded-lg">
-            <div className="text-sm text-red-600 mb-1">Ideal Needs (50%)</div>
-            <div className="text-2xl font-bold text-red-700">
-              {state.settings.currency}{idealNeeds.toFixed(2)}
-            </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <div className="font-semibold text-amber-700">30% {t('Wants', language)}</div>
+            <div className="text-xs text-gray-600">{t('Discretionary spending such as dining, shopping, and entertainment.', language)}</div>
           </div>
-          <div className="p-4 bg-orange-50 rounded-lg">
-            <div className="text-sm text-orange-600 mb-1">Ideal Wants (30%)</div>
-            <div className="text-2xl font-bold text-orange-700">
-              {state.settings.currency}{idealWants.toFixed(2)}
-            </div>
-          </div>
-          <div className="p-4 bg-green-50 rounded-lg">
-            <div className="text-sm text-green-600 mb-1">Ideal Savings (20%)</div>
-            <div className="text-2xl font-bold text-green-700">
-              {state.settings.currency}{idealSavings.toFixed(2)}
-            </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+            <div className="font-semibold text-emerald-700">20% {t('Savings', language)}</div>
+            <div className="text-xs text-gray-600">{t('Savings, investments, and extra debt payments.', language)}</div>
           </div>
         </div>
-      </div>
+      </AppCard>
 
-      {/* Current vs Ideal Comparison */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Current Breakdown</h2>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-          {/* Needs */}
-          <div className="p-6 bg-red-50 rounded-lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-red-700">Needs</span>
-              {needsVariance <= 0 ? (
-                <TrendingDown className="w-5 h-5 text-green-600" />
-              ) : (
-                <TrendingUp className="w-5 h-5 text-red-600" />
-              )}
-            </div>
-            <div className="text-3xl font-bold text-red-700 mb-1">
-              {breakdown.needsPercent.toFixed(1)}%
-            </div>
-            <div className="text-lg font-semibold text-red-600 mb-2">
-              {state.settings.currency}{breakdown.needs.toFixed(2)}
-            </div>
-            <div className={`text-sm ${needsVariance <= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {needsVariance > 0 ? '+' : ''}{state.settings.currency}{needsVariance.toFixed(2)} vs ideal
-            </div>
-            <div className="mt-3">
-              <div className="w-full bg-red-200 rounded-full h-2">
-                <div
-                  className="bg-red-600 h-2 rounded-full"
-                  style={{ width: `${Math.min((breakdown.needsPercent / 50) * 100, 100)}%` }}
-                />
+      <AppCard>
+        <SectionHeader title={t('Income & Targets', language)} subtitle={t('Based on recorded income and categorized spending.', language)} />
+        <div className="mt-4 grid gap-4 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs text-gray-500">{t('Total Income', language)}</div>
+            <div className="text-xl font-semibold text-gray-900">{hasIncome ? formatMoney(summary.incomeTotal) : '--'}</div>
+          </div>
+          {(['needs', 'wants', 'savings'] as PlanningBucketSummary['key'][]).map(key => (
+            <div key={key} className={`rounded-lg border ${bucketBorder[key]} p-4`}> 
+              <div className="text-xs text-gray-500">{t('Target', language)} {t(summary.buckets[key].label, language)}</div>
+              <div className="text-lg font-semibold text-gray-900">
+                {summary.buckets[key].targetAmount !== null ? formatMoney(summary.buckets[key].targetAmount) : '--'}
               </div>
-              <div className="text-xs text-red-600 mt-1">
-                Target: 50% • {breakdown.needsPercent > 50 ? 'Over' : 'Under'} by {Math.abs(breakdown.needsPercent - 50).toFixed(1)}%
+              <div className="text-xs text-gray-500">{summary.buckets[key].targetPercent}%</div>
+            </div>
+          ))}
+        </div>
+      </AppCard>
+
+      <AppCard>
+        <SectionHeader title={t('Current Allocation', language)} subtitle={t('Actual versus target for each bucket.', language)} />
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          {renderBucketCard(summary.buckets.needs)}
+          {renderBucketCard(summary.buckets.wants)}
+          {renderBucketCard(summary.buckets.savings)}
+        </div>
+      </AppCard>
+
+      <AppCard>
+        <SectionHeader title={t('Actual vs Ideal', language)} subtitle={t('A quick comparison of your allocation.', language)} />
+        {!hasIncome ? (
+          <InlineEmptyState className="mt-4">{t('Add income transactions to see allocation visuals.', language)}</InlineEmptyState>
+        ) : (
+          <div className="mt-4 space-y-4">
+            <div>
+              <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+                <span>{t('Actual', language)}</span>
+                <span>{t('Based on income', language)}</span>
               </div>
+              {renderStack([
+                { key: 'needs', percent: summary.buckets.needs.actualPercent ?? 0 },
+                { key: 'wants', percent: summary.buckets.wants.actualPercent ?? 0 },
+                { key: 'savings', percent: summary.buckets.savings.actualPercent ?? 0 },
+              ])}
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+                <span>{t('Ideal', language)}</span>
+                <span>{t('50/30/20 target', language)}</span>
+              </div>
+              {renderStack([
+                { key: 'needs', percent: 50 },
+                { key: 'wants', percent: 30 },
+                { key: 'savings', percent: 20 },
+              ])}
             </div>
           </div>
+        )}
+      </AppCard>
 
-          {/* Wants */}
-          <div className="p-6 bg-orange-50 rounded-lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-orange-700">Wants</span>
-              {wantsVariance <= 0 ? (
-                <TrendingDown className="w-5 h-5 text-green-600" />
-              ) : (
-                <TrendingUp className="w-5 h-5 text-orange-600" />
-              )}
-            </div>
-            <div className="text-3xl font-bold text-orange-700 mb-1">
-              {breakdown.wantsPercent.toFixed(1)}%
-            </div>
-            <div className="text-lg font-semibold text-orange-600 mb-2">
-              {state.settings.currency}{breakdown.wants.toFixed(2)}
-            </div>
-            <div className={`text-sm ${wantsVariance <= 0 ? 'text-green-600' : 'text-orange-600'}`}>
-              {wantsVariance > 0 ? '+' : ''}{state.settings.currency}{wantsVariance.toFixed(2)} vs ideal
-            </div>
-            <div className="mt-3">
-              <div className="w-full bg-orange-200 rounded-full h-2">
-                <div
-                  className="bg-orange-600 h-2 rounded-full"
-                  style={{ width: `${Math.min((breakdown.wantsPercent / 30) * 100, 100)}%` }}
-                />
-              </div>
-              <div className="text-xs text-orange-600 mt-1">
-                Target: 30% • {breakdown.wantsPercent > 30 ? 'Over' : 'Under'} by {Math.abs(breakdown.wantsPercent - 30).toFixed(1)}%
-              </div>
-            </div>
+      <AppCard>
+        <SectionHeader title={t('Top Category Drivers', language)} subtitle={t('What is most influencing each bucket.', language)} />
+        {driverBuckets.length === 0 ? (
+          <InlineEmptyState className="mt-4">{t('No categorized expenses available yet.', language)}</InlineEmptyState>
+        ) : (
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            {driverBuckets.map(bucketKey => {
+              const bucket = summary.buckets[bucketKey];
+              return (
+                <div key={bucketKey} className={`rounded-lg border ${bucketBorder[bucketKey]} p-4`}>
+                  <div className="text-sm font-semibold text-gray-900 mb-2">{t(bucket.label, language)}</div>
+                  <div className="space-y-2 text-sm text-gray-700">
+                    {bucket.drivers.map(driver => (
+                      <div key={driver.categoryId} className="flex items-center justify-between">
+                        <div className="truncate">{driver.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {formatMoney(driver.amount)} � {driver.shareOfBucket.toFixed(1)}%
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
+        )}
+      </AppCard>
 
-          {/* Savings */}
-          <div className="p-6 bg-green-50 rounded-lg">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-green-700">Savings</span>
-              {savingsVariance >= 0 ? (
-                <TrendingUp className="w-5 h-5 text-green-600" />
-              ) : (
-                <TrendingDown className="w-5 h-5 text-red-600" />
-              )}
-            </div>
-            <div className="text-3xl font-bold text-green-700 mb-1">
-              {breakdown.savingsPercent.toFixed(1)}%
-            </div>
-            <div className="text-lg font-semibold text-green-600 mb-2">
-              {state.settings.currency}{breakdown.savings.toFixed(2)}
-            </div>
-            <div className={`text-sm ${savingsVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {savingsVariance > 0 ? '+' : ''}{state.settings.currency}{savingsVariance.toFixed(2)} vs ideal
-            </div>
-            <div className="mt-3">
-              <div className="w-full bg-green-200 rounded-full h-2">
-                <div
-                  className="bg-green-600 h-2 rounded-full"
-                  style={{ width: `${Math.min((breakdown.savingsPercent / 20) * 100, 100)}%` }}
-                />
-              </div>
-              <div className="text-xs text-green-600 mt-1">
-                Target: 20% • {breakdown.savingsPercent > 20 ? 'Over' : 'Under'} by {Math.abs(breakdown.savingsPercent - 20).toFixed(1)}%
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Visual Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Actual Breakdown</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={chartData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(1)}%`}
-                outerRadius={100}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {chartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(value: number) => `${state.settings.currency}${value.toFixed(2)}`} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Ideal 50/30/20 Split</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={idealChartData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name }) => name}
-                outerRadius={100}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {idealChartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(value: number) => `${value}%`} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Recommendations */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">📋 Recommendations</h2>
-        <div className="space-y-3">
-          {breakdown.needsPercent > 50 && (
-            <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded">
-              <div className="font-semibold text-red-800 mb-1">⚠️ Needs are too high</div>
-              <p className="text-sm text-red-700">
-                Your essential expenses are {breakdown.needsPercent.toFixed(1)}% of income. Consider reducing housing costs, 
-                refinancing loans, or finding ways to lower utilities and transportation expenses.
-              </p>
-            </div>
+      <AppCard>
+        <SectionHeader title={t('Reallocation Plan', language)} subtitle={t('Suggested adjustments to reach target.', language)} />
+        <div className="mt-4 space-y-2 text-sm text-gray-700">
+          {summary.reallocation.reduceWantsBy && (
+            <div>� {t('Reduce Wants by', language)} {formatMoney(summary.reallocation.reduceWantsBy)} {t('to reach 30%.', language)}</div>
           )}
-          
-          {breakdown.wantsPercent > 30 && (
-            <div className="p-4 bg-orange-50 border-l-4 border-orange-500 rounded">
-              <div className="font-semibold text-orange-800 mb-1">💸 Want spending is high</div>
-              <p className="text-sm text-orange-700">
-                You're spending {breakdown.wantsPercent.toFixed(1)}% on wants. Try cutting back on dining out, 
-                entertainment subscriptions, or shopping to redirect funds toward savings and debt payoff.
-              </p>
-            </div>
+          {summary.reallocation.increaseSavingsBy && (
+            <div>� {t('Increase Savings by', language)} {formatMoney(summary.reallocation.increaseSavingsBy)} {t('to reach 20%.', language)}</div>
           )}
-          
-          {breakdown.savingsPercent < 20 && (
-            <div className="p-4 bg-yellow-50 border-l-4 border-yellow-500 rounded">
-              <div className="font-semibold text-yellow-800 mb-1">📉 Savings rate is low</div>
-              <p className="text-sm text-yellow-700">
-                You're only saving {breakdown.savingsPercent.toFixed(1)}% of income. Aim to increase this to at least 20% 
-                by automating savings, reducing discretionary spending, or finding ways to increase income.
-              </p>
-            </div>
+          {summary.reallocation.reduceNeedsBy && (
+            <div>� {t('Needs exceed target by', language)} {formatMoney(summary.reallocation.reduceNeedsBy)} {t('review essential costs.', language)}</div>
           )}
-
-          {breakdown.needsPercent <= 50 && breakdown.wantsPercent <= 30 && breakdown.savingsPercent >= 20 && (
-            <div className="p-4 bg-green-50 border-l-4 border-green-500 rounded">
-              <div className="font-semibold text-green-800 mb-1">🎉 Excellent budget balance!</div>
-              <p className="text-sm text-green-700">
-                Your spending aligns well with the 50/30/20 rule. Keep up the great work! Continue monitoring 
-                and adjusting as your income and circumstances change.
-              </p>
-            </div>
-          )}
-
-          {totalIncome === 0 && (
-            <div className="p-4 bg-blue-50 border-l-4 border-blue-500 rounded">
-              <div className="font-semibold text-blue-800 mb-1">ℹ️ No income data yet</div>
-              <p className="text-sm text-blue-700">
-                Add income transactions to see your 50/30/20 breakdown. Go to the Transaction Log to get started!
-              </p>
-            </div>
+          {!summary.reallocation.reduceWantsBy && !summary.reallocation.increaseSavingsBy && !summary.reallocation.reduceNeedsBy && (
+            <div>{t('No major reallocations needed based on current data.', language)}</div>
           )}
         </div>
-      </div>
+      </AppCard>
 
-      {/* Category Assignment Info */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
-        <h3 className="font-semibold text-lg mb-2 text-blue-900">How Categories are Assigned</h3>
-        <p className="text-sm text-blue-800">
-          Categories are assigned to Needs, Wants, or Savings in Setup. Edit any expense category to change its
-          50/30/20 classification.
-        </p>
-      </div>
+      <AppCard>
+        <SectionHeader title={t('Recommendations', language)} subtitle={t('Prioritized guidance based on your data.', language)} />
+        <div className="mt-4 space-y-3">
+          {summary.recommendations.map(item => (
+            <div
+              key={item.id}
+              className={`rounded-lg border p-4 ${
+                item.tone === 'positive'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  : item.tone === 'warn'
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-slate-200 bg-slate-50 text-slate-700'
+              }`}
+            >
+              <div className="text-sm font-semibold mb-1">{t(item.title, language)}</div>
+              <div className="text-sm">
+                {t(item.detail, language)}
+                {item.amount ? ` ${formatMoney(item.amount)}` : ''}
+              </div>
+            </div>
+          ))}
+        </div>
+      </AppCard>
+
+      <AppCard>
+        <SectionHeader title={t('Category Mapping & Trust', language)} subtitle={t('Results depend on category assignments.', language)} />
+        <div className="mt-4 space-y-3">
+          {(summary.dataQuality.lowNeedsSignal || summary.dataQuality.highWantsSignal || summary.dataQuality.uncategorizedShare && summary.dataQuality.uncategorizedShare > 10) && (
+            <InlineWarningCallout>
+              {t('Signals suggest some categories may need review in Setup.', language)}
+            </InlineWarningCallout>
+          )}
+          <div className="text-sm text-gray-600">
+            {t('Categories are assigned to Needs, Wants, or Savings in Setup. Edit any expense category to change its 50/30/20 classification.', language)}
+          </div>
+        </div>
+      </AppCard>
     </div>
   );
 }

@@ -4,11 +4,13 @@ import {
   LedgerEvent,
   LedgerSourceType,
   toLedgerEventFromAccount,
+  toLedgerEventFromAccountBalance,
   toLedgerEventFromDebt,
   toLedgerEventFromDeposit,
   toLedgerEventFromFundTransaction,
   toLedgerEventFromTransaction,
 } from './ledgerAdapters';
+import { getDerivedAccountBalances } from './accountBalanceSelectors';
 
 // Read-only, derived ledger timeline for analytics.
 // Assumptions:
@@ -58,12 +60,17 @@ export interface LedgerSelectorInput {
 
 export const getAllLedgerEvents = (input: LedgerSelectorInput | BudgetState): LedgerEvent[] => {
   const source = 'settings' in input ? input : (input as LedgerSelectorInput);
+  const accountBalances = 'settings' in input ? getDerivedAccountBalances(input) : undefined;
   const events = [
     ...toLedgerEvents(source.transactions, toLedgerEventFromTransaction),
     ...toLedgerEvents(source.fundTransactions, toLedgerEventFromFundTransaction),
     ...toLedgerEvents(source.deposits, toLedgerEventFromDeposit),
     ...toLedgerEvents(source.debts, toLedgerEventFromDebt),
-    ...toLedgerEvents(source.accounts, toLedgerEventFromAccount),
+    ...(accountBalances
+      ? toLedgerEvents(source.accounts, account =>
+          toLedgerEventFromAccountBalance(account, accountBalances.get(account.id) ?? account.openingBalance ?? 0)
+        )
+      : toLedgerEvents(source.accounts, toLedgerEventFromAccount)),
     ...toLedgerEvents(source.wealthSnapshots, toLedgerEventFromWealthSnapshot),
   ];
   return events.sort(compareLedgerEvents);

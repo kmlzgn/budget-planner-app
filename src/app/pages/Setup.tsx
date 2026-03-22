@@ -4,8 +4,14 @@ import { useBudget } from '../context/BudgetContext';
 import { Plus, Trash2, Edit2, Check, X, Download, Upload } from 'lucide-react';
 import { BudgetState, Category, CategoryClassification, Transaction, FundTransaction, Deposit, Account, FundHoldingMeta } from '../types';
 import { generateId } from '../utils/id';
-import { getMonthNames, t } from '../utils/i18n';
+import { getMonthNames, t, tKey } from '../utils/i18n';
+import { getCategoryBucketCounts, getPlanningMappingHealth } from '../utils/settingsHealth';
 import { format } from 'date-fns';
+import { AppCard } from '../components/ui/app-card';
+import { SectionHeader } from '../components/ui/section-header';
+import { PrimaryButton, SecondaryButton, DangerButton } from '../components/ui/app-buttons';
+import { InlineWarningCallout } from '../components/ui/inline-warning-callout';
+import { InlineEmptyState } from '../components/ui/inline-empty-state';
 import { UnitsInput } from '../components/inputs/NumberInput';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { BreadcrumbInline } from '../components/BreadcrumbInline';
@@ -559,6 +565,13 @@ export function Setup() {
 
   const incomeCategories = state.categories.filter(c => c.type === 'income');
   const expenseCategories = state.categories.filter(c => c.type === 'expense');
+  const categoryBucketCounts = getCategoryBucketCounts(state.categories);
+  const planningMapping = getPlanningMappingHealth(state.categories);
+  const planningSummaryLine = !planningMapping.hasAnyExpense
+    ? t('Add expense categories to enable planning insights.', language)
+    : planningMapping.missing > 0
+      ? t('Planning classification needs review.', language)
+      : t('Planning classification is complete.', language);
   const classificationLabel = (value?: CategoryClassification) => {
     if (value === 'needs') return t('Needs', language);
     if (value === 'wants') return t('Wants', language);
@@ -582,22 +595,86 @@ export function Setup() {
     );
   };
 
+  const classifiedExpenseCount = Math.max(0, categoryBucketCounts.totalExpense - categoryBucketCounts.none);
+
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          {t('Setup & Configuration', language)}
-          <BreadcrumbInline />
-        </h1>
-        <p className="text-gray-600">{t('Configure your budget settings and customize categories', language)}</p>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-2">
+          <h1 className="text-3xl font-bold text-gray-900">
+            {tKey('Settings', language)}
+            <BreadcrumbInline />
+          </h1>
+          <p className="text-gray-600">{t('System settings that drive planning, categories, and valuation.', language)}</p>
+          <p className="text-sm text-gray-500">{planningSummaryLine}</p>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1">
+          <div>
+            <span className="text-gray-500">{t('Base currency', language)}:</span>{' '}
+            <span className="text-gray-800 font-medium">{state.settings.currency || '-'}</span>
+          </div>
+          <div>
+            <span className="text-gray-500">{t('Language', language)}:</span>{' '}
+            <span className="text-gray-800 font-medium">
+              {state.settings.language === 'tr' ? t('Turkish', language) : t('English', language)}
+            </span>
+          </div>
+          <div>
+            <span className="text-gray-500">{t('Budget Start Month', language)}:</span>{' '}
+            <span className="text-gray-800 font-medium">{monthNames[draftSettings.startMonth]}</span>
+          </div>
+        </div>
       </div>
 
-      {/* Getting Started */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">{t('Getting Started', language)}</h2>
-          <p className="text-sm text-gray-600">{t('Complete the basics to personalize your plan.', language)}</p>
+      <AppCard className="space-y-4">
+        <SectionHeader
+          title={t('System Health', language)}
+          subtitle={t('Configuration status for planning and categories.', language)}
+        />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="rounded-lg bg-gray-50 p-3 space-y-1">
+            <div className="text-xs text-gray-500">{t('Planning Classification', language)}</div>
+            <div
+              className={`text-sm font-semibold ${
+                planningMapping.hasFullCoverage ? 'text-emerald-700' : planningMapping.hasAnyExpense ? 'text-amber-700' : 'text-gray-700'
+              }`}
+            >
+              {planningMapping.hasAnyExpense
+                ? planningMapping.hasFullCoverage
+                  ? t('Good', language)
+                  : t('Needs attention', language)
+                : t('No data available.', language)}
+            </div>
+            <div className="text-xs text-gray-500">
+              {planningMapping.totalExpense > 0
+                ? `${classifiedExpenseCount}/${planningMapping.totalExpense} ${t('Expense categories classified', language)}`
+                : t('No expense categories yet.', language)}
+            </div>
+          </div>
+          <div className="rounded-lg bg-gray-50 p-3 space-y-1">
+            <div className="text-xs text-gray-500">{t('Unassigned', language)}</div>
+            <div className="text-sm font-semibold text-gray-900">{planningMapping.missing}</div>
+            <div className="text-xs text-gray-500">{t('Expense Categories', language)}</div>
+          </div>
+          <div className="rounded-lg bg-gray-50 p-3 space-y-1">
+            <div className="text-xs text-gray-500">{t('Users / Owners', language)}</div>
+            <div className="text-sm font-semibold text-gray-900">{ownersCount}</div>
+            <div className="text-xs text-gray-500">{t('Spenders', language)}</div>
+          </div>
         </div>
+        {planningMapping.missing > 0 && (
+          <InlineWarningCallout>
+            {t('Assign planning buckets to improve 50/30/20 insights.', language)}
+          </InlineWarningCallout>
+        )}
+      </AppCard>
+
+      {/* Getting Started */}
+      <AppCard className="space-y-4">
+        <SectionHeader
+          title={t('Getting Started', language)}
+          subtitle={t('Complete the basics to personalize your plan.', language)}
+        />
         <div className="space-y-2">
           {onboardingSteps.map(step => (
             <div key={step.label} className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 rounded-lg">
@@ -616,11 +693,14 @@ export function Setup() {
             </div>
           ))}
         </div>
-      </div>
+      </AppCard>
 
-      {/* Basic Settings */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-6">
-        <h2 className="text-xl font-semibold text-gray-900">{t('Basic Settings', language)}</h2>
+      {/* Core Settings */}
+      <AppCard className="space-y-6">
+        <SectionHeader
+          title={t('Core Settings', language)}
+          subtitle={t('Base currency and language affect reporting and valuation.', language)}
+        />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
@@ -636,6 +716,7 @@ export function Setup() {
                 <option key={curr} value={curr}>{curr}</option>
               ))}
             </select>
+            <p className="mt-2 text-xs text-gray-500">{t('Base currency', language)} {t('affects portfolio valuation and net worth reporting.', language)}</p>
           </div>
 
           <div>
@@ -690,30 +771,29 @@ export function Setup() {
               <option value="en">{t('English', language)}</option>
               <option value="tr">{t('Turkish', language)}</option>
             </select>
+            <p className="mt-2 text-xs text-gray-500">{t('Language controls date and number formatting.', language)}</p>
           </div>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded p-4">
-          <p className="text-sm text-blue-900">
+        <InlineWarningCallout>
+          <p>
             <strong>{t('Zero-Based:', language)}</strong> {t('Assign every dollar a purpose each month. Budget equals income.', language)}
             <br />
             <strong>{t('Carryover:', language)}</strong> {t('Unspent money carries over to the next month.', language)}
           </p>
-        </div>
+        </InlineWarningCallout>
 
         <div className="flex justify-end">
-          <button
-            onClick={applySettings}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-          >
-            {t('Apply Settings', language)}
-          </button>
+          <PrimaryButton onClick={applySettings}>{t('Apply Settings', language)}</PrimaryButton>
         </div>
-      </div>
+      </AppCard>
 
-      {/* Family Members */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <h2 className="text-xl font-semibold text-gray-900">{t('Family Members / Spenders', language)}</h2>
+      {/* Users / Owners */}
+      <AppCard className="space-y-4">
+        <SectionHeader
+          title={t('Users / Owners', language)}
+          subtitle={t('Track who owns accounts and who spends.', language)}
+        />
         
         <div className="flex gap-2">
           <input
@@ -724,13 +804,10 @@ export function Setup() {
             placeholder={t('Add family member name...', language)}
             className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
           />
-          <button
-            onClick={handleAddMember}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
-          >
+          <PrimaryButton onClick={handleAddMember} className="flex items-center gap-2">
             <Plus className="w-4 h-4" />
             {t('Add', language)}
-          </button>
+          </PrimaryButton>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -751,11 +828,54 @@ export function Setup() {
             </div>
           ))}
         </div>
+      </AppCard>
+
+      {/* Planning Classification */}
+      <AppCard className="space-y-4">
+        <SectionHeader
+          title={t('Planning Classification', language)}
+          subtitle={t('Used by Planning to compute 50/30/20 allocation insights.', language)}
+        />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="rounded-lg bg-gray-50 p-3">
+            <div className="text-xs text-gray-500">{t('Needs', language)}</div>
+            <div className="text-lg font-semibold text-gray-900">{categoryBucketCounts.needs}</div>
+          </div>
+          <div className="rounded-lg bg-gray-50 p-3">
+            <div className="text-xs text-gray-500">{t('Wants', language)}</div>
+            <div className="text-lg font-semibold text-gray-900">{categoryBucketCounts.wants}</div>
+          </div>
+          <div className="rounded-lg bg-gray-50 p-3">
+            <div className="text-xs text-gray-500">{t('Savings', language)}</div>
+            <div className="text-lg font-semibold text-gray-900">{categoryBucketCounts.savings}</div>
+          </div>
+          <div className="rounded-lg bg-gray-50 p-3">
+            <div className="text-xs text-gray-500">{t('Unassigned', language)}</div>
+            <div className="text-lg font-semibold text-gray-900">{categoryBucketCounts.none}</div>
+          </div>
+        </div>
+        <div className="text-xs text-gray-500">
+          {planningMapping.totalExpense > 0
+            ? `${classifiedExpenseCount}/${planningMapping.totalExpense} ${t('Expense categories classified', language)}`
+            : t('No expense categories yet.', language)}
+        </div>
+        {planningMapping.missing > 0 && (
+          <InlineWarningCallout>
+            {t('Assign planning buckets to improve 50/30/20 insights.', language)}
+          </InlineWarningCallout>
+        )}
+      </AppCard>
+
+      <div className="space-y-2">
+        <div className="space-y-1">
+          <h2 className="text-xl font-semibold text-gray-900">{t('Category Management', language)}</h2>
+          <p className="text-sm text-gray-500">{t('Organize income and expense categories used across the app.', language)}</p>
+        </div>
       </div>
 
       {/* Income Categories */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <h2 className="text-xl font-semibold text-gray-900">{t('Income Categories', language)}</h2>
+      <AppCard className="space-y-4">
+        <SectionHeader title={t('Income Categories', language)} />
         
         <div className="space-y-2">
           <div className="flex items-center gap-2 px-3 text-xs font-semibold text-gray-500 uppercase">
@@ -764,6 +884,9 @@ export function Setup() {
             <span className="w-28">{t('Type', language)}</span>
             <span className="w-20 text-right">{t('Actions', language)}</span>
           </div>
+          {incomeCategories.length === 0 && (
+            <InlineEmptyState>{t('No data available.', language)}</InlineEmptyState>
+          )}
           {incomeCategories.map(category => (
             <div key={category.id} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
               {editingCategory === category.id ? (
@@ -822,22 +945,22 @@ export function Setup() {
             placeholder={t('New income category...', language)}
             className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
           />
-          <button
+          <PrimaryButton
             onClick={() => {
               setNewCategory({ ...newCategory, type: 'income', classification: 'none' });
               handleAddCategory();
             }}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
+            className="flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             {t('Add Income', language)}
-          </button>
+          </PrimaryButton>
         </div>
-      </div>
+      </AppCard>
 
       {/* Expense Categories */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <h2 className="text-xl font-semibold text-gray-900">{t('Expense Categories', language)}</h2>
+      <AppCard className="space-y-4">
+        <SectionHeader title={t('Expense Categories', language)} />
         
         <div className="space-y-2">
           <div className="flex items-center gap-2 px-3 text-xs font-semibold text-gray-500 uppercase">
@@ -846,6 +969,9 @@ export function Setup() {
             <span className="w-28">{t('Type', language)}</span>
             <span className="w-20 text-right">{t('Actions', language)}</span>
           </div>
+          {expenseCategories.length === 0 && (
+            <InlineEmptyState>{t('No data available.', language)}</InlineEmptyState>
+          )}
           {expenseCategories.map(category => (
             <div key={category.id} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
               {editingCategory === category.id ? (
@@ -923,40 +1049,34 @@ export function Setup() {
             <option value="savings">{t('Savings', language)}</option>
             <option value="none">{t('Other', language)}</option>
           </select>
-          <button
+          <PrimaryButton
             onClick={() => {
               setNewCategory({ ...newCategory, type: 'expense' });
               handleAddCategory();
             }}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
+            className="flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             {t('Add Expense', language)}
-          </button>
+          </PrimaryButton>
         </div>
-      </div>
+      </AppCard>
 
-      {/* Data Management */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">{t('Data Management', language)}</h2>
-          <p className="text-sm text-gray-600">{t('Export or import backup data safely.', language)}</p>
-        </div>
+      {/* Backups & Data Tools */}
+      <AppCard className="space-y-4">
+        <SectionHeader
+          title={t('Advanced & Backups', language)}
+          subtitle={t('Backup, restore, and data integrity tools.', language)}
+        />
         <div className="flex flex-wrap gap-3">
-          <button
-            onClick={() => setIsExportOpen(true)}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
-          >
+          <PrimaryButton onClick={() => setIsExportOpen(true)} className="flex items-center gap-2">
             <Download className="w-4 h-4" />
             {t('Export Data', language)}
-          </button>
-          <button
-            onClick={handleFullExport}
-            className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 flex items-center gap-2"
-          >
+          </PrimaryButton>
+          <SecondaryButton onClick={handleFullExport} className="flex items-center gap-2">
             <Download className="w-4 h-4" />
             {t('Export Full Backup', language)}
-          </button>
+          </SecondaryButton>
           <input
             ref={importFileInputRef}
             type="file"
@@ -968,31 +1088,10 @@ export function Setup() {
               if (file) handleImportFile(file);
             }}
           />
-          <button
-            onClick={() => importFileInputRef.current?.click()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
-          >
+          <SecondaryButton onClick={() => importFileInputRef.current?.click()} className="flex items-center gap-2">
             <Upload className="w-4 h-4" />
             {t('Import Data', language)}
-          </button>
-          <input
-            ref={fullImportFileInputRef}
-            type="file"
-            accept=".json"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = '';
-              if (file) handleFullImportFile(file);
-            }}
-          />
-          <button
-            onClick={() => fullImportFileInputRef.current?.click()}
-            className="px-4 py-2 bg-blue-700 text-white rounded-lg hover:bg-blue-800 flex items-center gap-2"
-          >
-            <Upload className="w-4 h-4" />
-            {t('Restore Full Backup', language)}
-          </button>
+          </SecondaryButton>
         </div>
         {(backupMeta.lastExportAt || backupMeta.lastImportAt) && (
           <div className="text-xs text-gray-500">
@@ -1008,17 +1107,43 @@ export function Setup() {
           </div>
         )}
         {dataMessage && (
-          <div className={`text-sm ${dataMessageType === 'success' ? 'text-emerald-700' : 'text-red-600'}`}>
+          <InlineWarningCallout className={dataMessageType === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : ''}>
             {dataMessage}
-          </div>
+          </InlineWarningCallout>
         )}
         {importError && (
-          <div className="text-sm text-red-600">{importError}</div>
+          <InlineWarningCallout>{importError}</InlineWarningCallout>
         )}
         {fullRestoreError && (
-          <div className="text-sm text-red-600">{fullRestoreError}</div>
+          <InlineWarningCallout>{fullRestoreError}</InlineWarningCallout>
         )}
-      </div>
+      </AppCard>
+
+      {/* Danger Zone */}
+      <AppCard className="space-y-4 border border-rose-100">
+        <SectionHeader
+          title={t('Danger Zone', language)}
+          subtitle={t('Destructive actions that can overwrite data.', language)}
+        />
+        <div className="text-sm text-gray-600">
+          {t('Restoring a full backup will replace selected datasets in your current plan.', language)}
+        </div>
+        <input
+          ref={fullImportFileInputRef}
+          type="file"
+          accept=".json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) handleFullImportFile(file);
+          }}
+        />
+        <DangerButton onClick={() => fullImportFileInputRef.current?.click()} className="flex items-center gap-2">
+          <Upload className="w-4 h-4" />
+          {t('Restore Full Backup', language)}
+        </DangerButton>
+      </AppCard>
 
       <Dialog open={isExportOpen} onOpenChange={setIsExportOpen}>
         <DialogContent className="max-w-lg">
@@ -1053,18 +1178,12 @@ export function Setup() {
             ))}
           </div>
           <DialogFooter className="gap-2 sm:justify-end">
-            <button
-              onClick={() => setIsExportOpen(false)}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
+            <SecondaryButton onClick={() => setIsExportOpen(false)}>
               {t('Cancel', language)}
-            </button>
-            <button
-              onClick={handleExport}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-            >
+            </SecondaryButton>
+            <PrimaryButton onClick={handleExport}>
               {t('Export', language)}
-            </button>
+            </PrimaryButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1140,18 +1259,12 @@ export function Setup() {
             </div>
           </div>
           <DialogFooter className="gap-2 sm:justify-end">
-            <button
-              onClick={() => setIsImportOpen(false)}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
+            <SecondaryButton onClick={() => setIsImportOpen(false)}>
               {t('Cancel', language)}
-            </button>
-            <button
-              onClick={handleApplyImport}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-            >
+            </SecondaryButton>
+            <PrimaryButton onClick={handleApplyImport}>
               {t('Apply Import', language)}
-            </button>
+            </PrimaryButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1227,19 +1340,15 @@ export function Setup() {
             </div>
           )}
           <DialogFooter className="gap-2 sm:justify-end">
-            <button
-              onClick={() => setIsFullRestoreOpen(false)}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
+            <SecondaryButton onClick={() => setIsFullRestoreOpen(false)}>
               {t('Cancel', language)}
-            </button>
-            <button
+            </SecondaryButton>
+            <DangerButton
               onClick={handleApplyFullRestore}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
               disabled={!Object.values(fullRestoreSelection).some(Boolean)}
             >
               {t('Restore Selected', language)}
-            </button>
+            </DangerButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

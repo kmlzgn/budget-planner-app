@@ -122,6 +122,7 @@ const normalizeAccount = (account: Account, settingsCurrency: string): Account =
     : undefined;
   return {
     ...account,
+    currentBalance: Number.isFinite(account.currentBalance) ? account.currentBalance : account.openingBalance ?? 0,
     currency,
     isForeignCurrency,
     exchangeRate: account.exchangeRate ?? 1,

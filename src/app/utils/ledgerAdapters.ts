@@ -147,3 +147,26 @@ export const toLedgerEventFromAccount = (account: Account): LedgerEvent => ({
     isAsset: account.isAsset,
   },
 });
+
+export const toLedgerEventFromAccountBalance = (
+  account: Account,
+  balance: number,
+  date: string = new Date().toISOString().slice(0, 10)
+): LedgerEvent => ({
+  id: `acct:${account.id}`,
+  date,
+  sourceType: 'account',
+  sourceId: account.id,
+  direction: 'valuation',
+  amount: normalizeLedgerAmount(balance),
+  amountSemantics: 'nominal',
+  currency: account.currency,
+  accountId: account.id,
+  assetClass: account.isAsset ? 'cash' : 'other',
+  description: account.name,
+  metadata: {
+    type: account.type,
+    openingBalance: account.openingBalance,
+    isAsset: account.isAsset,
+  },
+});

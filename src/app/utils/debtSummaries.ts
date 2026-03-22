@@ -1,45 +1,34 @@
 import { Debt, DebtStrategy } from '../types';
-import { calculateDebtPayoffTimeline, getDebtPayoffOrder } from './budgetCalculations';
+import {
+  DebtSimulationResult,
+  getDebtMonthlyPayment,
+  getDebtReadiness,
+  getExtraPaymentImpact,
+  getDebtStrategyComparison,
+  normalizeDebtBalance,
+  orderDebtsForStrategy,
+  simulateDebtPayoff,
+} from './debtSimulation';
 
 export type DebtDecisionSummary = {
   totalDebt: number;
-  totalMinimumPayments: number;
+  totalMinimumPayments: number | null;
   debtCount: number;
-  monthsToDebtFree: number;
-  totalInterestEstimate: number;
-  monthsToDebtFreeBaseline: number;
-  totalInterestBaseline: number;
-  interestSaved: number;
-  monthsSaved: number;
+  monthsToDebtFree: number | null;
+  totalInterestEstimate: number | null;
+  monthsToDebtFreeBaseline: number | null;
+  totalInterestBaseline: number | null;
+  interestSaved: number | null;
+  monthsSaved: number | null;
   missingRatesCount: number;
   missingPaymentCount: number;
+  insufficientPaymentCount: number;
+  invalidBalanceCount: number;
   payoffOrder: Debt[];
-};
-
-const normalizeDebtsForTimeline = (debts: Debt[]): Debt[] =>
-  debts.map(debt => {
-    const paidAmount = debt.alreadyPaidAmount ?? 0;
-    const paidInstallments = debt.alreadyPaidInstallments ?? 0;
-    const installmentAmount = debt.installmentAmount ?? debt.minimumPayment ?? 0;
-    const fallbackBalance = Math.max(
-      0,
-      (debt.totalAmount || 0) - paidAmount - (paidInstallments * installmentAmount)
-    );
-    const shouldFallback = debt.currentBalance <= 0 && debt.totalAmount > 0;
-    return {
-      ...debt,
-      currentBalance: shouldFallback ? fallbackBalance : debt.currentBalance,
-    };
-  });
-
-const extractTimelineTotals = (debts: Debt[], strategy: DebtStrategy, extraPayment: number) => {
-  if (debts.length === 0) {
-    return { monthsToDebtFree: 0, totalInterestEstimate: 0 };
-  }
-  const timeline = calculateDebtPayoffTimeline(debts, strategy, extraPayment);
-  const monthsToDebtFree = timeline.length > 0 ? Math.max(...timeline.map(t => t.monthsToPayoff)) : 0;
-  const totalInterestEstimate = timeline.reduce((sum, t) => sum + t.totalInterest, 0);
-  return { monthsToDebtFree, totalInterestEstimate };
+  simulation: DebtSimulationResult;
+  baselineSimulation: DebtSimulationResult;
+  extraPaymentImpact: ReturnType<typeof getExtraPaymentImpact> | null;
+  strategyComparison: ReturnType<typeof getDebtStrategyComparison> | null;
 };
 
 export const getDebtDecisionSummary = (
@@ -47,32 +36,56 @@ export const getDebtDecisionSummary = (
   strategy: DebtStrategy,
   extraPayment: number
 ): DebtDecisionSummary => {
-  const normalizedDebts = normalizeDebtsForTimeline(debts);
-  const totalDebt = normalizedDebts.reduce((sum, d) => sum + (d.currentBalance || 0), 0);
-  const totalMinimumPayments = normalizedDebts.reduce((sum, d) => sum + (d.minimumPayment || 0), 0);
-  const debtCount = normalizedDebts.length;
-  const missingRatesCount = normalizedDebts.filter(d => !d.interestRate || d.interestRate <= 0).length;
-  const missingPaymentCount = normalizedDebts.filter(d => !d.minimumPayment || d.minimumPayment <= 0).length;
-  const payoffOrder = getDebtPayoffOrder(normalizedDebts, strategy);
+  const readiness = debts.map(getDebtReadiness);
+  const totalDebt = readiness.reduce((sum, item) => sum + (item.balance || 0), 0);
+  const totalMinimumPaymentsRaw = readiness.reduce((sum, item) => {
+    const payment = getDebtMonthlyPayment(item.debt);
+    return sum + (payment ?? 0);
+  }, 0);
+  const totalMinimumPayments = totalMinimumPaymentsRaw > 0 ? totalMinimumPaymentsRaw : null;
+  const debtCount = debts.length;
+  const missingRatesCount = readiness.filter(r => r.status === 'missing_interest').length;
+  const missingPaymentCount = readiness.filter(r => r.status === 'missing_payment').length;
+  const insufficientPaymentCount = readiness.filter(r => r.status === 'insufficient_payment').length;
+  const invalidBalanceCount = readiness.filter(r => r.status === 'invalid_balance').length;
 
-  const current = extractTimelineTotals(normalizedDebts, strategy, extraPayment);
-  const baseline = extractTimelineTotals(normalizedDebts, strategy, 0);
+  const simulation = simulateDebtPayoff(debts, strategy, extraPayment);
+  const baselineSimulation = simulateDebtPayoff(debts, strategy, 0);
 
-  const monthsSaved = Math.max(0, (baseline.monthsToDebtFree || 0) - (current.monthsToDebtFree || 0));
-  const interestSaved = Math.max(0, (baseline.totalInterestEstimate || 0) - (current.totalInterestEstimate || 0));
+  const monthsToDebtFree = simulation.status === 'ok' ? simulation.totalMonths : null;
+  const totalInterestEstimate = simulation.status === 'ok' ? simulation.totalInterest : null;
+  const monthsToDebtFreeBaseline = baselineSimulation.status === 'ok' ? baselineSimulation.totalMonths : null;
+  const totalInterestBaseline = baselineSimulation.status === 'ok' ? baselineSimulation.totalInterest : null;
+
+  const extraPaymentImpact = getExtraPaymentImpact(debts, strategy, extraPayment);
+  const strategyComparison = getDebtStrategyComparison(debts, extraPayment);
+
+  const monthsSaved = extraPaymentImpact ? extraPaymentImpact.monthsSaved : null;
+  const interestSaved = extraPaymentImpact ? extraPaymentImpact.interestSaved : null;
+
+  const payoffOrder = orderDebtsForStrategy(
+    debts.map(debt => ({ ...debt, currentBalance: normalizeDebtBalance(debt) })),
+    strategy
+  );
 
   return {
     totalDebt,
     totalMinimumPayments,
     debtCount,
-    monthsToDebtFree: current.monthsToDebtFree,
-    totalInterestEstimate: current.totalInterestEstimate,
-    monthsToDebtFreeBaseline: baseline.monthsToDebtFree,
-    totalInterestBaseline: baseline.totalInterestEstimate,
+    monthsToDebtFree,
+    totalInterestEstimate,
+    monthsToDebtFreeBaseline,
+    totalInterestBaseline,
     interestSaved,
     monthsSaved,
     missingRatesCount,
     missingPaymentCount,
+    insufficientPaymentCount,
+    invalidBalanceCount,
     payoffOrder,
+    simulation,
+    baselineSimulation,
+    extraPaymentImpact,
+    strategyComparison,
   };
 };

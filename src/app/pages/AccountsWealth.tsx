@@ -1,13 +1,13 @@
 ﻿import { useState } from 'react';
 import { useAccountsDomain, useBudgetState, useSavingsGoalsDomain, useWealthSnapshotsDomain } from '../context/budgetDomains';
 import { useBudget } from '../context/BudgetContext';
-import { Plus, Trash2, Edit2, TrendingUp, Check } from 'lucide-react';
+import { Plus, Trash2, Edit2, Check } from 'lucide-react';
 import { Account, SavingsGoal, AccountType, Deposit, WealthViewMode } from '../types';
 import { generateId } from '../utils/id';
 import { format } from 'date-fns';
 import { getCreditCardCycleSummary } from '../utils/budgetCalculations';
 import { formatCurrency } from '../utils/formatting';
-import { CurrencyInput, UnitsInput } from '../components/inputs/NumberInput';
+import { MoneyField } from '../components/inputs/MoneyField';
 import { SmartDateInput } from '../components/inputs/SmartDateInput';
 import { Line, LineChart, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis, Legend } from 'recharts';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
@@ -17,9 +17,24 @@ import { getDepositExpectedValue } from '../utils/wealthCalculations';
 import { buildWealthBreakdown } from '../utils/wealthSelectors';
 import { getDebtSummary, getNetWorthSummary, getPortfolioAllocation, getTransferAwareMonthlyOutflowSummary } from '../utils/financeSummaries';
 import { getFundPortfolioSummary } from '../utils/portfolioSummaries';
-import { t } from '../utils/i18n';
+import { getPortfolioAllocationTotal } from '../utils/accountsWealthSelectors';
+import { normalizeCommodityPriceFromState } from '../utils/marketData';
+import { formatDateDisplay, t, tKey } from '../utils/i18n';
 import { BreadcrumbInline } from '../components/BreadcrumbInline';
-import { TransferAwareOutflowDetail } from '../components/TransferAwareOutflowDetail';
+import { NetWorthSummaryCards } from '../components/netWorth/NetWorthSummaryCards';
+import { PortfolioCockpitCard } from '../components/netWorth/PortfolioCockpitCard';
+import { DepositsSummaryCard } from '../components/netWorth/DepositsSummaryCard';
+import { DebtSummaryCard } from '../components/netWorth/DebtSummaryCard';
+import { AssetAccountsList } from '../components/netWorth/AssetAccountsList';
+import { AccountEditorModal } from '../components/netWorth/AccountEditorModal';
+import { SummaryCard } from '../components/netWorth/SummaryCard';
+import { SectionTitle } from '../components/netWorth/SectionTitle';
+import { EmptyState } from '../components/netWorth/EmptyState';
+import { PrimaryButton, SecondaryButton } from '../components/ui/app-buttons';
+import { AppCard } from '../components/ui/app-card';
+import { SectionHeader } from '../components/ui/section-header';
+import { InlineEmptyState } from '../components/ui/inline-empty-state';
+import { InlineWarningCallout } from '../components/ui/inline-warning-callout';
 
 const accountTypes: { value: AccountType; label: string; isAsset: boolean }[] = [
   { value: 'cash', label: 'Cash', isAsset: true },
@@ -100,7 +115,7 @@ export function AccountsWealth() {
   const handleSubmitAccount = () => {
     if (accountFormData.name && accountFormData.type !== undefined) {
       const isCreditCard = accountFormData.type === 'credit-card';
-      const isPension = accountFormData.type === 'pension';
+      const isRetirementAccount = accountFormData.type === 'pension' || accountFormData.type === 'retirement';
       const isCommodity = accountFormData.type === 'commodities';
       const statementDay = isCreditCard ? clampDay(accountFormData.statementDay, 1) : undefined;
       const dueDay = isCreditCard ? clampDay(accountFormData.dueDay, Math.min((statementDay ?? 1) + 10, 28)) : undefined;
@@ -119,13 +134,14 @@ export function AccountsWealth() {
           } as Account)
         : 0;
       const commodityValue = commodityValuationMode === 'auto' ? commodityUnits * commodityPrice : (accountFormData.currentBalance ?? 0);
-      const derivedBalance = isPension
+      const derivedBalance = isRetirementAccount
         ? pensionFundValue + governmentContribution
         : isCommodity
           ? commodityValue
           : (accountFormData.currentBalance ?? 0);
+      const shouldPersistDerivedBalance = !(isRetirementAccount || (isCommodity && commodityValuationMode === 'auto'));
       if (editingAccountId) {
-        updateAccount(editingAccountId, {
+        const updates: Partial<Account> = {
           ...accountFormData,
           statementDay,
           dueDay,
@@ -134,8 +150,9 @@ export function AccountsWealth() {
           commodityName,
           commodityUnits,
           commodityValuationMode,
-          currentBalance: derivedBalance,
-        });
+          ...(shouldPersistDerivedBalance ? { currentBalance: derivedBalance } : {}),
+        };
+        updateAccount(editingAccountId, updates);
         setEditingAccountId(null);
       } else {
         const currency = accountFormData.currency || state.settings.currency;
@@ -154,7 +171,7 @@ export function AccountsWealth() {
           commodityName,
           commodityUnits,
           commodityValuationMode,
-          currentBalance: derivedBalance,
+          currentBalance: shouldPersistDerivedBalance ? derivedBalance : 0,
         } as Account);
       }
       resetAccountForm();
@@ -348,7 +365,10 @@ export function AccountsWealth() {
     blocked: t('Blocked', language),
     other: t('Other', language),
   });
-  const portfolioTotal = portfolioAllocation.reduce((sum, item) => sum + item.value, 0);
+  const portfolioTotal = getPortfolioAllocationTotal(portfolioAllocation);
+  const sortedPortfolio = [...portfolioAllocation].sort((a, b) => b.value - a.value);
+  const topPortfolio = sortedPortfolio[0];
+  const topPortfolioPct = topPortfolio && portfolioTotal > 0 ? (topPortfolio.value / portfolioTotal) * 100 : 0;
   const todayStr = format(today, 'yyyy-MM-dd');
   const fundCashflows = state.fundTransactions.map(t => ({
     date: t.date,
@@ -400,14 +420,22 @@ export function AccountsWealth() {
       || (account.name.toLowerCase().includes('gold') || account.name.toLowerCase().includes('altin') ? 'Gold' : '');
     if (!fallbackName) return 0;
     const match = state.marketData.commodities.find(item => item.commodity.toLowerCase() === fallbackName.toLowerCase());
-    return match?.price ?? 0;
+    const normalized = normalizeCommodityPriceFromState(match, state.settings.currency, getMarketFxRate);
+    return normalized.price ?? 0;
   };
   const getCommodityBaselinePrice = (account: Account) => {
     const fallbackName = account.commodityName?.trim()
       || (account.name.toLowerCase().includes('gold') || account.name.toLowerCase().includes('altin') ? 'Gold' : '');
     if (!fallbackName) return 0;
     const match = state.marketData.commodities.find(item => item.commodity.toLowerCase() === fallbackName.toLowerCase());
-    return match?.baselinePrice ?? 0;
+    if (!match?.baselinePrice) return 0;
+    if (match.mode !== 'auto') return match.baselinePrice;
+    const normalized = normalizeCommodityPriceFromState(
+      { ...match, price: match.baselinePrice },
+      state.settings.currency,
+      getMarketFxRate
+    );
+    return normalized.price ?? 0;
   };
   const getCommodityBaselineValue = (account: Account) => {
     const units = account.commodityUnits ?? 0;
@@ -427,17 +455,8 @@ export function AccountsWealth() {
     }
     return value;
   };
-  const getAccountLocalValue = (account: Account) => {
-    if (account.type === 'commodities' && account.commodityValuationMode === 'auto') {
-      const units = account.commodityUnits ?? 0;
-      const price = getCommodityMarketPrice(account);
-      return units * price;
-    }
-    if (account.type === 'pension') {
-      return (account.pensionFundValue ?? 0) + (account.governmentContribution ?? 0);
-    }
-    return accountBalances.get(account.id) ?? account.currentBalance;
-  };
+  const getAccountLocalValue = (account: Account) =>
+    accountBalances.get(account.id) ?? account.openingBalance ?? 0;
   const getAccountValue = (account: Account) => toBase(getAccountLocalValue(account), account);
   const getAccountBaselineValue = (account: Account) => {
     if (account.type === 'commodities') {
@@ -487,6 +506,9 @@ export function AccountsWealth() {
         commodityValuationMode: accountFormData.commodityValuationMode ?? 'manual',
       } as Account)
     : (accountFormData.currentBalance ?? 0);
+  const ownerOptions = (state.settings.owners && state.settings.owners.length > 0)
+    ? state.settings.owners
+    : state.settings.familyMembers;
 
   const handleCaptureSnapshot = () => {
     addWealthSnapshot({
@@ -641,7 +663,7 @@ export function AccountsWealth() {
 
   const liabilityCards = [
     ...liabilityAccounts.map(account => {
-      const derivedBalance = accountBalances.get(account.id) ?? account.currentBalance;
+      const derivedBalance = accountBalances.get(account.id) ?? account.openingBalance ?? 0;
       const cardSummary = account.type === 'credit-card'
         ? getCreditCardCycleSummary(account, state.transactions, today)
         : null;
@@ -660,39 +682,64 @@ export function AccountsWealth() {
     })),
   ];
 
+  const totalAssetsForSummary = adjustedNetWorth.value + adjustedLiabilitiesTotal.value;
+  const liabilitiesRatio = totalAssetsForSummary > 0 ? adjustedLiabilitiesTotal.value / totalAssetsForSummary : 0;
+  const headerSummary = totalAssetsForSummary > 0
+    ? liabilitiesRatio < 0.2
+      ? t('Net worth is strong with low liabilities', language)
+      : liabilitiesRatio > 0.5
+        ? t('Net worth pressured by liabilities', language)
+        : t('Net worth is balanced', language)
+    : t('No data available.', language);
+
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          {t('Accounts & Wealth Tracking', language)}
-          <BreadcrumbInline />
-        </h1>
-        <p className="text-gray-600">{t('Monitor your accounts, net worth, and savings goals', language)}</p>
+    <div className="app-page">
+      <div className="app-page-header">
+        <div>
+          <h1 className="app-page-title mb-2">
+            {tKey('Net Worth', language)}
+            <BreadcrumbInline />
+          </h1>
+          <div className="text-sm text-gray-600">{headerSummary}</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+          <span className="rounded-full border border-gray-200 bg-white px-3 py-1">
+            {tKey('As of', language)} {formatDateDisplay(today, language)}
+          </span>
+          <span className="rounded-full border border-gray-200 bg-white px-3 py-1">
+            {wealthViewMode === 'real' ? t('Inflation-adjusted', language) : t('Nominal', language)}
+          </span>
+          <span className="rounded-full border border-gray-200 bg-white px-3 py-1">
+            {dataIssues.length === 0
+              ? t('No data issues detected.', language)
+              : `${dataIssues.length} ${t('issues detected', language)}`}
+          </span>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setWealthViewMode('nominal')}
-            className={`px-4 py-2 rounded-lg text-sm ${wealthViewMode === 'nominal' ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+            className={`px-4 py-2 rounded-lg text-sm ${wealthViewMode === 'nominal' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700'}`}
           >
             {t('Nominal', language)}
           </button>
           <button
             onClick={() => setWealthViewMode('real')}
-            className={`px-4 py-2 rounded-lg text-sm ${wealthViewMode === 'real' ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+            className={`px-4 py-2 rounded-lg text-sm ${wealthViewMode === 'real' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700'}`}
           >
             {t('Real', language)}
           </button>
         </div>
         <div className="relative">
-          <button
+          <PrimaryButton
             onClick={() => setShowAddMenu(prev => !prev)}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2 text-sm"
+            className="flex items-center gap-2 text-sm"
           >
             <Plus className="w-4 h-4" />
             {t('Add', language)}
-          </button>
+          </PrimaryButton>
           {showAddMenu && (
             <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow z-10">
               <button
@@ -716,194 +763,65 @@ export function AccountsWealth() {
       )}
 
       {/* Asset Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div className="bg-white rounded-lg shadow p-5">
-          <div className="text-sm text-gray-500">{t('Cash', language)}</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">
-            {formatCurrency(adjustedCashTotal.value, state.settings.currency, locale)}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-5 border border-emerald-200">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-500">{t('Funds', language)}</div>
-            <TrendingUp className="w-4 h-4 text-emerald-500" />
-          </div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">
-            {formatCurrency(adjustedFundAssetsTotal.value, state.settings.currency, locale)}
-          </div>
-          <div className="mt-2 text-xs text-gray-600">
-            {t('Cost Basis', language)}: {formatCurrency(adjustedFundCostBasis.value, state.settings.currency, locale)}
-          </div>
-          <div className={`text-xs ${adjustedFundUnrealized.value >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {t('Unrealized P/L', language)}: {formatCurrency(adjustedFundUnrealized.value, state.settings.currency, locale)} ({fundUnrealizedPnLPct.toFixed(2)}%)
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            {activeFundsCount} {t('active funds', language)}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-5">
-          <div className="text-sm text-gray-500">{t('Commodities', language)}</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">
-            {formatCurrency(adjustedGoldTotal.value, state.settings.currency, locale)}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-5">
-          <div className="text-sm text-gray-500">{t('Deposits', language)}</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">
-            {formatCurrency(adjustedDepositsTotal.value, state.settings.currency, locale)}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-5">
-          <div className="text-sm text-gray-500">{t('Debts', language)}</div>
-          <div className="text-2xl font-bold text-red-600 mt-1">
-            {formatCurrency(adjustedLiabilitiesTotal.value, state.settings.currency, locale)}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-5 border border-blue-200">
-          <div className="text-sm text-gray-500">{t('Net Wealth', language)}</div>
-          <div className={`text-2xl font-bold mt-1 ${netWorth >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {formatCurrency(adjustedNetWorth.value, state.settings.currency, locale)}
-          </div>
-          <div className="text-xs text-gray-500 mt-1">{t('Assets - Liabilities', language)}</div>
-        </div>
-      </div>
+      <NetWorthSummaryCards
+        language={language}
+        locale={locale}
+        currency={state.settings.currency}
+        adjustedCashTotal={adjustedCashTotal}
+        adjustedFundAssetsTotal={adjustedFundAssetsTotal}
+        adjustedFundCostBasis={adjustedFundCostBasis}
+        adjustedFundUnrealized={adjustedFundUnrealized}
+        adjustedGoldTotal={adjustedGoldTotal}
+        adjustedDepositsTotal={adjustedDepositsTotal}
+        adjustedLiabilitiesTotal={adjustedLiabilitiesTotal}
+        adjustedNetWorth={adjustedNetWorth}
+        fundUnrealizedPnLPct={fundUnrealizedPnLPct}
+        activeFundsCount={activeFundsCount}
+        netWorth={netWorth}
+        activeDepositCount={activeDepositCount}
+        maturingIn7={maturingIn7}
+      />
 
       {/* Quick Summaries */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white rounded-lg shadow p-5">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-gray-500">{t('Portfolio Cockpit', language)}</div>
-            <button
-              onClick={() => setAdvancedSections(prev => Array.from(new Set([...prev, 'fund-holdings'])))}
-              className="text-xs text-emerald-700 hover:underline"
-            >
-              {t('View holdings', language)}
-            </button>
-          </div>
-          {fundPortfolio.lowConfidence && (
-            <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
-              {fundPortfolio.missingPriceCount > 0 && (
-                <div>{formatIssue('Fund holdings have no price for valuation.', fundPortfolio.missingPriceCount)}</div>
-              )}
-              {fundPortfolio.invalidTransactionCount > 0 && (
-                <div>{formatIssue('Fund transactions have missing fields or zero units.', fundPortfolio.invalidTransactionCount)}</div>
-              )}
-            </div>
-          )}
-          <div className="text-2xl font-bold text-gray-900">
-            {formatCurrency(adjustedFundAssetsTotal.value, state.settings.currency, locale)}
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
-            <div>
-              <div className="text-gray-400">{t('Cost Basis', language)}</div>
-              <div className="font-semibold text-gray-900">
-                {formatCurrency(adjustedFundCostBasis.value, state.settings.currency, locale)}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-400">{t('Unrealized P/L', language)}</div>
-              <div className={adjustedFundUnrealized.value >= 0 ? 'font-semibold text-green-600' : 'font-semibold text-red-600'}>
-                {formatCurrency(adjustedFundUnrealized.value, state.settings.currency, locale)}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-400">{t('Net Invested', language)}</div>
-              <div className="font-semibold text-gray-900">
-                {formatCurrency(fundPortfolio.netInvested, state.settings.currency, locale)}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-400">{t('Nominal Return', language)}</div>
-              <div className={`font-semibold ${fundPortfolio.nominalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {fundPortfolio.netInvested !== 0 ? `${(fundPortfolio.nominalReturn * 100).toFixed(1)}%` : 'â€”'}
-              </div>
-            </div>
-          </div>
-          <div className="mt-2 text-xs text-gray-500">
-            {activeFundsCount} {t('active funds', language)} Â· {t('Top holding', language)}:{' '}
-            {fundPortfolio.topHoldingPct > 0 ? `${fundPortfolio.topHoldingPct.toFixed(1)}%` : 'â€”'} Â· {t('Top 3 concentration', language)}:{' '}
-            {fundPortfolio.top3Pct > 0 ? `${fundPortfolio.top3Pct.toFixed(1)}%` : 'â€”'}
-          </div>
-          <div className="mt-2 text-[11px] text-gray-400">{t('Realized P/L (coming soon)', language)}</div>
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-            <div>
-              <div className="text-gray-400">{t('Allocation by Fund', language)}</div>
-              {fundPortfolio.allocationsByFund.length === 0 ? (
-                <div className="text-gray-500">{t('No fund holdings yet. Add a buy to start.', language)}</div>
-              ) : (
-                fundPortfolio.allocationsByFund.slice(0, 3).map(item => (
-                  <div key={item.fund} className="flex items-center justify-between text-gray-700">
-                    <span className="truncate">{item.fund}</span>
-                    <span className="font-semibold text-gray-900">{item.pct.toFixed(1)}%</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div>
-              <div className="text-gray-400">{t('Allocation by Account', language)}</div>
-              {fundPortfolio.allocationsByAccount.length === 0 ? (
-                <div className="text-gray-500">{t('No fund holdings yet. Add a buy to start.', language)}</div>
-              ) : (
-                fundPortfolio.allocationsByAccount.slice(0, 3).map(item => {
-                  const accountName = item.accountId ? accountById.get(item.accountId)?.name : t('Unassigned', language);
-                  return (
-                    <div key={item.accountId ?? 'unassigned'} className="flex items-center justify-between text-gray-700">
-                      <span className="truncate">{accountName}</span>
-                      <span className="font-semibold text-gray-900">{item.pct.toFixed(1)}%</span>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-          <div className="mt-2 text-xs text-gray-500">
-            {t('Allocation by Category', language)}: {t('Category allocation not available yet.', language)}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-5">
-          <div className="text-sm text-gray-500 mb-2">{t('Deposits Summary', language)}</div>
-          <div className="text-2xl font-bold text-gray-900">
-            {formatCurrency(activePrincipalTotal, state.settings.currency, locale)}
-          </div>
-          <div className="text-sm text-gray-700">{t('Net Interest', language)}: {formatCurrency(activeNetInterestTotal, state.settings.currency, locale)}</div>
-          <div className="text-sm text-gray-700">{t('Next Maturity', language)}: {nextMaturity || '-'}</div>
-          <div className="text-xs text-gray-500 mt-1">
-            {t('Active', language)}: {activeDepositCount} â€¢ {t('Maturing in 7 days', language)}: {maturingIn7}
-          </div>
-        </div>
+        <PortfolioCockpitCard
+          language={language}
+          locale={locale}
+          currency={state.settings.currency}
+          fundPortfolio={fundPortfolio}
+          adjustedFundAssetsTotal={adjustedFundAssetsTotal}
+          adjustedFundCostBasis={adjustedFundCostBasis}
+          adjustedFundUnrealized={adjustedFundUnrealized}
+          activeFundsCount={activeFundsCount}
+          accountById={accountById}
+          onViewHoldings={() => setAdvancedSections(prev => Array.from(new Set([...prev, 'fund-holdings'])))}
+          formatIssue={formatIssue}
+        />
+        <DepositsSummaryCard
+          language={language}
+          locale={locale}
+          currency={state.settings.currency}
+          activePrincipalTotal={activePrincipalTotal}
+          activeNetInterestTotal={activeNetInterestTotal}
+          nextMaturity={nextMaturity}
+          activeDepositCount={activeDepositCount}
+          maturingIn7={maturingIn7}
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-        <div className="bg-white rounded-lg shadow p-5">
-          <div className="text-sm text-gray-500 mb-2">{t('Debt Summary', language)}</div>
-          <div className="text-2xl font-bold text-red-600">
-            {formatCurrency(debtSummary.totalDebt, state.settings.currency, locale)}
-          </div>
-          <div className="text-sm text-gray-700">
-            {t('Min. Payments', language)}: {formatCurrency(debtSummary.minimumPayments, state.settings.currency, locale)} {t('per month', language)}
-          </div>
-          <TransferAwareOutflowDetail
-            summary={transferAwareOutflow}
-            currency={state.settings.currency}
-            locale={locale}
-            language={language}
-            size="xs"
-          />
-          <div className="text-xs text-gray-500 mt-1">
-            {debtSummary.debtCount} {t('Debts', language)}
-          </div>
-        </div>
-        <div className="bg-white rounded-lg shadow p-5">
+        <DebtSummaryCard
+          language={language}
+          locale={locale}
+          currency={state.settings.currency}
+          debtSummary={debtSummary}
+          transferAwareOutflow={transferAwareOutflow}
+        />
+        <SummaryCard>
           <div className="text-sm text-gray-500 mb-2">{t('Portfolio Allocation', language)}</div>
           {portfolioTotal > 0 ? (
             <div className="space-y-2 text-sm">
-              {portfolioAllocation.slice(0, 4).map(item => {
+              {sortedPortfolio.slice(0, 4).map(item => {
                 const pct = portfolioTotal > 0 ? (item.value / portfolioTotal) * 100 : 0;
                 return (
                   <div key={item.key} className="flex items-center justify-between text-gray-700">
@@ -911,114 +829,49 @@ export function AccountsWealth() {
                       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
                       <span>{item.name}</span>
                     </div>
-                    <span className="font-semibold text-gray-900">{pct.toFixed(1)}%</span>
+                    <div className="text-right">
+                      <div className="font-semibold text-gray-900">{formatCurrency(item.value, state.settings.currency, locale)}</div>
+                      <div className="text-xs text-gray-500">{pct.toFixed(0)}%</div>
+                    </div>
                   </div>
                 );
               })}
+              {topPortfolio && (
+                <div className="text-xs text-gray-500">
+                  {t('Largest allocation', language)}: {topPortfolio.name} ({topPortfolioPct.toFixed(0)}%)
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-gray-500">{t('No portfolio data yet. Add a holding to begin.', language)}</div>
           )}
-        </div>
+        </SummaryCard>
       </div>
 
       {/* Accounts Summary */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Asset Accounts */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-gray-900">{t('Asset Accounts', language)}</h2>
-          </div>
-          <div className="space-y-2">
-            {assetAccounts.length === 0 ? (
-              <p className="text-gray-500 text-center py-8">{t('No accounts yet. Add one to start tracking.', language)}</p>
-            ) : (
-              assetAccounts.map(account => {
-                const localBalance = getAccountLocalValue(account);
-                const derivedBalance = getAccountValue(account);
-                  const baselineValue = getAccountBaselineValue(account);
-                  const change = derivedBalance - baselineValue;
-                  const changePct = baselineValue > 0 ? (change / baselineValue) * 100 : 0;
-                return (
-                  <div key={account.id} className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <div className="font-semibold text-gray-900" title={getAccountLabel(account.id)}>
-                          {getAccountLabel(account.id)}
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          {t(accountTypes.find(t => t.value === account.type)?.label ?? '', language)}
-                        </div>
-                        {account.institution && (
-                          <div className="text-xs text-gray-500">{t('Institution', language)}: {account.institution}</div>
-                        )}
-                        {account.owner && (
-                          <div className="text-xs text-gray-500">{t('Owner', language)}: {account.owner}</div>
-                        )}
-                        {account.currency && (
-                          <div className="text-xs text-gray-500">{t('Account Currency', language)}: {account.currency}</div>
-                        )}
-                        {account.type === 'commodities' && (
-                          <div className="text-xs text-gray-500">
-                            {t('Commodity', language)}: {account.commodityName || account.name} â€¢ {t('Units', language)}: {account.commodityUnits ?? 0} â€¢ {t('Mode', language)}: {t(account.commodityValuationMode === 'auto' ? 'Auto Fetch' : 'Manual', language)}
-                          </div>
-                        )}
-                        {account.type === 'pension' && (
-                          <div className="text-xs text-gray-500">
-                            {t('Fund Value', language)}: {formatCurrency(account.pensionFundValue ?? 0, state.settings.currency, locale)}
-                            {' â€¢ '}
-                            {t('Government Contribution', language)}: {formatCurrency(account.governmentContribution ?? 0, state.settings.currency, locale)}
-                          </div>
-                        )}
-                        {account.notes && (
-                          <div className="text-xs text-gray-500">{account.notes}</div>
-                        )}
-                      </div>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => startEditAccount(account)}
-                          className="p-2 text-blue-600 hover:bg-blue-50 rounded"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => deleteAccount(account.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="text-2xl font-bold text-gray-900">
-                        {formatCurrency(derivedBalance, state.settings.currency, locale)}
-                      </div>
-                      <div className={`text-sm ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {change >= 0 ? '+' : ''}{formatCurrency(change, state.settings.currency, locale)}
-                        {baselineValue > 0 && (
-                          <span className="text-xs text-gray-500 ml-1">
-                            ({changePct.toFixed(1)}%)
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {account.isForeignCurrency && account.currency && (
-                      <div className="mt-1 text-xs text-gray-500">
-                        {formatLocalAmount(localBalance, account.currency)} â€¢ {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)} â†’ {formatCurrency(derivedBalance, state.settings.currency, locale)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
+        <AssetAccountsList
+          language={language}
+          locale={locale}
+          currency={state.settings.currency}
+          assetAccounts={assetAccounts}
+          accountTypes={accountTypes}
+          getAccountLabel={getAccountLabel}
+          formatLocalAmount={formatLocalAmount}
+          getAccountLocalValue={getAccountLocalValue}
+          getAccountValue={getAccountValue}
+          getAccountBaselineValue={getAccountBaselineValue}
+          resolveAccountFxRate={resolveAccountFxRate}
+          onEdit={startEditAccount}
+          onDelete={deleteAccount}
+        />
 
         {/* Liability Accounts */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">{t('Liability Accounts', language)}</h2>
+        <AppCard>
+          <SectionHeader title={t('Liability Accounts', language)} className="mb-4" />
           {liabilityCards.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">{t('No accounts yet. Add one to start tracking.', language)}</p>
+            <EmptyState>{t('No accounts yet. Add one to start tracking.', language)}</EmptyState>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {liabilityCards.map(item => {
@@ -1027,7 +880,7 @@ export function AccountsWealth() {
                   const cardSummary = item.cardSummary;
                   const cardId = `account-${account.id}`;
                   const isOpen = openLiabilityId === cardId;
-                  const localBalance = accountBalances.get(account.id) ?? account.currentBalance;
+                  const localBalance = accountBalances.get(account.id) ?? account.openingBalance ?? 0;
                   const baseBalance = account.currency && account.currency !== state.settings.currency
                     ? localBalance * resolveAccountFxRate(account)
                     : localBalance;
@@ -1036,22 +889,18 @@ export function AccountsWealth() {
                   const typeLabel = t(accountTypes.find(t => t.value === account.type)?.label ?? '', language);
 
                   return (
-                    <div key={cardId} className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div key={cardId} className="p-4 bg-rose-50 border border-rose-200 rounded-lg">
                       <div className="flex items-start justify-between">
                         <div>
                           <div className="font-semibold text-gray-900" title={getAccountLabel(account.id)}>
                             {getAccountLabel(account.id)}
                           </div>
-                          <div className="text-xs text-gray-600">{typeLabel}</div>
-                          {account.institution && (
-                            <div className="text-xs text-gray-500">{t('Institution', language)}: {account.institution}</div>
-                          )}
-                          {account.owner && (
-                            <div className="text-xs text-gray-500">{t('Owner', language)}: {account.owner}</div>
-                          )}
-                          {account.currency && (
-                            <div className="text-xs text-gray-500">{t('Account Currency', language)}: {account.currency}</div>
-                          )}
+                          <div className="text-xs text-gray-500">
+                            {typeLabel}
+                            {account.institution ? ` · ${account.institution}` : ''}
+                            {account.owner ? ` · ${account.owner}` : ''}
+                            {account.currency ? ` · ${account.currency}` : ''}
+                          </div>
                         </div>
                         <div className="flex gap-1">
                           <button
@@ -1070,15 +919,15 @@ export function AccountsWealth() {
                       </div>
                       <div className="mt-2 flex items-center justify-between">
                         <div>
-                          <div className="text-2xl font-bold text-red-700">
+                          <div className="text-2xl font-bold text-rose-700">
                             {formatCurrency(Math.abs(balance), state.settings.currency, locale)}
                           </div>
-                          <div className={`text-xs ${change <= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <div className={`text-xs ${change <= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {change <= 0 ? '' : '+'}{formatCurrency(Math.abs(change), state.settings.currency, locale)}
                           </div>
                           {account.isForeignCurrency && account.currency && !cardSummary && (
                             <div className="mt-1 text-xs text-gray-500">
-                            {formatLocalAmount(Math.abs(localBalance), account.currency)} ? {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)} ? {formatCurrency(Math.abs(baseBalance), state.settings.currency, locale)}
+                            {formatLocalAmount(Math.abs(localBalance), account.currency)} · {t('FX Rate to Base', language)}: {resolveAccountFxRate(account)} · {formatCurrency(Math.abs(baseBalance), state.settings.currency, locale)}
                             </div>
                           )}
                         </div>
@@ -1101,7 +950,7 @@ export function AccountsWealth() {
                       </div>
                       {cardSummary && (
                         <div className="mt-2 text-xs text-gray-600">
-                          {t('Unpaid Statement', language)}: {formatCurrency(cardSummary.unpaidStatementBalance, state.settings.currency, locale)} Ã¢â‚¬Â¢ {t('Unbilled Spending', language)}: {formatCurrency(cardSummary.unbilledSpending, state.settings.currency, locale)}
+                          {t('Unpaid Statement', language)}: {formatCurrency(cardSummary.unpaidStatementBalance, state.settings.currency, locale)} · {t('Unbilled Spending', language)}: {formatCurrency(cardSummary.unbilledSpending, state.settings.currency, locale)}
                         </div>
                       )}
                       {isOpen && cardSummary && (
@@ -1128,7 +977,7 @@ export function AccountsWealth() {
                 const debt = item.debt;
                 const balance = Math.abs(debt.currentBalance || 0);
                 return (
-                  <div key={debtCardId} className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                  <div key={debtCardId} className="p-4 bg-rose-50 border border-rose-200 rounded-lg">
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="font-semibold text-gray-900">{debt.name}</div>
@@ -1142,7 +991,7 @@ export function AccountsWealth() {
                       </button>
                     </div>
                     <div className="mt-2">
-                      <div className="text-2xl font-bold text-red-700">
+                      <div className="text-2xl font-bold text-rose-700">
                         {formatCurrency(balance, state.settings.currency, locale)}
                       </div>
                       {debt.minimumPayment > 0 && (
@@ -1162,17 +1011,16 @@ export function AccountsWealth() {
               })}
             </div>
           )}
-        </div>
+        </AppCard>
       </div>
 
       {/* Advanced */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">{t('Advanced', language)}</h2>
-            <p className="text-sm text-gray-600">{t('Details, breakdowns, and diagnostics', language)}</p>
-          </div>
-        </div>
+      <AppCard>
+        <SectionHeader
+          title={t('Advanced', language)}
+          subtitle={t('Details, breakdowns, and diagnostics', language)}
+          className="mb-4"
+        />
         <Accordion type="multiple" value={advancedSections} onValueChange={setAdvancedSections} className="space-y-3">
           <AccordionItem value="fund-holdings" className="border border-gray-200 rounded-lg px-4">
             <AccordionTrigger className="text-sm font-semibold">{t('Fund Holdings', language)}</AccordionTrigger>
@@ -1308,31 +1156,29 @@ export function AccountsWealth() {
           <AccordionItem value="wealth-history" className="border border-gray-200 rounded-lg px-4">
             <AccordionTrigger className="text-sm font-semibold">{t('Wealth History', language)}</AccordionTrigger>
             <AccordionContent>
-              <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">{t('Wealth History', language)}</h2>
-            <p className="text-sm text-gray-600">{t('Snapshots of total wealth over time', language)}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={snapshotRange}
-              onChange={(e) => setSnapshotRange(e.target.value as typeof snapshotRange)}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-            >
-              <option value="1m">1M</option>
-              <option value="3m">3M</option>
-              <option value="ytd">YTD</option>
-              <option value="all">{t('All', language)}</option>
-            </select>
-            <button
-              onClick={handleCaptureSnapshot}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm"
-            >
-              {t('Capture Snapshot', language)}
-            </button>
-          </div>
-        </div>
+              <AppCard>
+                <SectionHeader
+                  title={t('Wealth History', language)}
+                  subtitle={t('Snapshots of total wealth over time', language)}
+                  actions={(
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={snapshotRange}
+                        onChange={(e) => setSnapshotRange(e.target.value as typeof snapshotRange)}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      >
+                        <option value="1m">1M</option>
+                        <option value="3m">3M</option>
+                        <option value="ytd">YTD</option>
+                        <option value="all">{t('All', language)}</option>
+                      </select>
+                      <PrimaryButton onClick={handleCaptureSnapshot} size="sm">
+                        {t('Capture Snapshot', language)}
+                      </PrimaryButton>
+                    </div>
+                  )}
+                  className="mb-4"
+                />
         <div className="h-64 mb-4">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={timelineData}>
@@ -1404,20 +1250,18 @@ export function AccountsWealth() {
         {wealthViewMode === 'real' && !realDataAvailable && (
           <div className="text-xs text-amber-700 mt-2">{t('Real history unavailable without inflation data.', language)}</div>
         )}
-      </div>
+      </AppCard>
             </AccordionContent>
           </AccordionItem>
 
           <AccordionItem value="reconciliation" className="border border-gray-200 rounded-lg px-4">
             <AccordionTrigger className="text-sm font-semibold">{t('Reconciliation', language)}</AccordionTrigger>
             <AccordionContent>
-              <div className="bg-white rounded-lg shadow p-6 space-y-6">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">{t('Account Reconciliation', language)}</h2>
-                  <p className="text-sm text-gray-600">
-                    {t('Opening balance + transaction impact + manual adjustment = current app balance.', language)}
-                  </p>
-                </div>
+              <AppCard className="space-y-6">
+                <SectionHeader
+                  title={t('Account Reconciliation', language)}
+                  subtitle={t('Opening balance + transaction impact + manual adjustment = current app balance.', language)}
+                />
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 border-b border-gray-200">
@@ -1439,7 +1283,7 @@ export function AccountsWealth() {
                         </tr>
                       ) : (
                         reconciliationAccounts.map(account => {
-                          const derivedBalance = accountBalances.get(account.id) ?? account.currentBalance;
+                          const derivedBalance = accountBalances.get(account.id) ?? account.openingBalance ?? 0;
                           const opening = account.openingBalance ?? 0;
                           const transactionImpact = transactionImpactByAccount.get(account.id) ?? 0;
                           const manualAdjustment = derivedBalance - (opening + transactionImpact);
@@ -1520,81 +1364,84 @@ export function AccountsWealth() {
                     </table>
                   </div>
                 </div>
-              </div>
+              </AppCard>
             </AccordionContent>
           </AccordionItem>
 
           <AccordionItem value="data-health" className="border border-gray-200 rounded-lg px-4">
             <AccordionTrigger className="text-sm font-semibold">{t('Data Health & Reconciliation', language)}</AccordionTrigger>
             <AccordionContent>
-              <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900">{t('Data Health & Reconciliation', language)}</h2>
-          <div className="text-sm text-gray-600">
-            {dataIssues.length === 0 ? t('No data issues detected.', language) : `${dataIssues.length} ${t('issues detected', language)}`}
-          </div>
-        </div>
+              <AppCard className="space-y-4">
+                <SectionHeader
+                  title={t('Data Health & Reconciliation', language)}
+                  actions={(
+                    <div className="text-sm text-gray-600">
+                      {dataIssues.length === 0
+                        ? t('No data issues detected.', language)
+                        : `${dataIssues.length} ${t('issues detected', language)}`}
+                    </div>
+                  )}
+                />
 
-        <div className="space-y-2">
-          {dataIssues.length === 0 ? (
-            <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-              {t('No data issues detected.', language)}
-            </div>
-          ) : (
-            dataIssues.map((issue, index) => (
-              <div
-                key={`${issue.level}-${index}`}
-                className={`text-sm rounded-lg px-3 py-2 ${
-                  issue.level === 'error'
-                    ? 'bg-red-50 border border-red-200 text-red-700'
-                    : 'bg-amber-50 border border-amber-200 text-amber-700'
-                }`}
-              >
-                {issue.message}
-              </div>
-            ))
-          )}
-        </div>
+                <div className="space-y-2">
+                  {dataIssues.length === 0 ? (
+                    <InlineWarningCallout className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                      {t('No data issues detected.', language)}
+                    </InlineWarningCallout>
+                  ) : (
+                    dataIssues.map((issue, index) => (
+                      <InlineWarningCallout
+                        key={`${issue.level}-${index}`}
+                        className={issue.level === 'error'
+                          ? 'border-red-200 bg-red-50 text-red-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-700'}
+                      >
+                        {issue.message}
+                      </InlineWarningCallout>
+                    ))
+                  )}
+                </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Check', language)}</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Expected', language)}</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Actual', language)}</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Delta', language)}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {reconciliationRows.map(row => {
-                const delta = Math.abs(row.delta);
-                const ok = delta < 0.01;
-                return (
-                  <tr key={row.label}>
-                    <td className="px-3 py-2">{row.label}</td>
-                    <td className="px-3 py-2 text-right">{formatCurrency(row.expected, state.settings.currency, locale)}</td>
-                    <td className="px-3 py-2 text-right">{formatCurrency(row.actual, state.settings.currency, locale)}</td>
-                    <td className={`px-3 py-2 text-right ${ok ? 'text-green-600' : 'text-amber-600'}`}>
-                      {formatCurrency(row.delta, state.settings.currency, locale)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-              </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('Check', language)}</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Expected', language)}</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Actual', language)}</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">{t('Delta', language)}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {reconciliationRows.map(row => {
+                        const delta = Math.abs(row.delta);
+                        const ok = delta < 0.01;
+                        return (
+                          <tr key={row.label}>
+                            <td className="px-3 py-2">{row.label}</td>
+                            <td className="px-3 py-2 text-right">{formatCurrency(row.expected, state.settings.currency, locale)}</td>
+                            <td className="px-3 py-2 text-right">{formatCurrency(row.actual, state.settings.currency, locale)}</td>
+                            <td className={`px-3 py-2 text-right ${ok ? 'text-green-600' : 'text-amber-600'}`}>
+                              {formatCurrency(row.delta, state.settings.currency, locale)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </AppCard>
             </AccordionContent>
           </AccordionItem>
 
           <AccordionItem value="savings-goals" className="border border-gray-200 rounded-lg px-4">
             <AccordionTrigger className="text-sm font-semibold">{t('Savings Goals', language)}</AccordionTrigger>
             <AccordionContent>
-              <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">
-          {editingGoalId ? t('Edit Savings Goal', language) : t('Add Savings Goal', language)}
-        </h2>
+              <AppCard>
+                <SectionHeader
+                  title={editingGoalId ? t('Edit Savings Goal', language) : t('Add Savings Goal', language)}
+                  className="mb-4"
+                />
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
@@ -1612,9 +1459,10 @@ export function AccountsWealth() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {t('Target Amount', language)} * ({state.settings.currency})
             </label>
-            <CurrencyInput
+            <MoneyField
               value={goalFormData.targetAmount}
               onValueChange={(value) => setGoalFormData({ ...goalFormData, targetAmount: value })}
+              locale={locale}
               placeholder="0.00"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
@@ -1624,10 +1472,12 @@ export function AccountsWealth() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {t('Current Amount', language)} ({state.settings.currency})
             </label>
-            <CurrencyInput
+            <MoneyField
               value={goalFormData.currentAmount}
               onValueChange={(value) => setGoalFormData({ ...goalFormData, currentAmount: value })}
               onEmptyValueChange={() => setGoalFormData({ ...goalFormData, currentAmount: undefined })}
+              allowEmpty
+              locale={locale}
               placeholder="0.00"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
             />
@@ -1643,31 +1493,27 @@ export function AccountsWealth() {
           </div>
         </div>
 
-        <div className="flex gap-2 mt-4">
-          <button
-            onClick={handleSubmitGoal}
-            className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
-          >
-            {editingGoalId ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            {editingGoalId ? t('Update Goal', language) : t('Add Goal', language)}
-          </button>
-          {editingGoalId && (
-            <button
-              onClick={resetGoalForm}
-              className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
-              {t('Cancel', language)}
-            </button>
-          )}
-        </div>
-      </div>
+                <div className="flex gap-2 mt-4">
+                  <PrimaryButton onClick={handleSubmitGoal}>
+                    {editingGoalId ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                    {editingGoalId ? t('Update Goal', language) : t('Add Goal', language)}
+                  </PrimaryButton>
+                  {editingGoalId && (
+                    <SecondaryButton onClick={resetGoalForm}>
+                      {t('Cancel', language)}
+                    </SecondaryButton>
+                  )}
+                </div>
+              </AppCard>
 
       {/* Goals List */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">{t('Savings Goals Progress', language)}</h2>
+      <AppCard>
+        <SectionHeader title={t('Savings Goals Progress', language)} className="mb-4" />
         <div className="space-y-4">
           {state.savingsGoals.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">{t('No savings goals yet. Add one to start.', language)}</p>
+            <InlineEmptyState className="text-center py-8">
+              {t('No savings goals yet. Add one to start.', language)}
+            </InlineEmptyState>
           ) : (
             state.savingsGoals.map(goal => {
               const progress = goal.targetAmount > 0 ? (goal.currentAmount / goal.targetAmount) * 100 : 0;
@@ -1725,11 +1571,11 @@ export function AccountsWealth() {
             })
           )}
         </div>
-      </div>
+      </AppCard>
             </AccordionContent>
           </AccordionItem>
         </Accordion>
-      </div>
+      </AppCard>
 
       <Dialog
         open={isCardPaymentOpen}
@@ -1779,9 +1625,10 @@ export function AccountsWealth() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">{t('Amount', language)} * ({state.settings.currency})</label>
-              <CurrencyInput
+              <MoneyField
                 value={cardPaymentForm.amount}
                 onValueChange={(value) => setCardPaymentForm({ ...cardPaymentForm, amount: value })}
+                locale={locale}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             </div>
@@ -1812,253 +1659,38 @@ export function AccountsWealth() {
             </div>
           )}
           <DialogFooter>
-            <button
+            <SecondaryButton
               onClick={() => {
                 setIsCardPaymentOpen(false);
                 resetCardPaymentForm();
               }}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
             >
               {t('Cancel', language)}
-            </button>
-            <button
-              onClick={handleCardPaymentSubmit}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-            >
+            </SecondaryButton>
+            <PrimaryButton onClick={handleCardPaymentSubmit}>
               {t('Add Payment', language)}
-            </button>
+            </PrimaryButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={isAccountModalOpen}
-        onOpenChange={(open) => {
-          setIsAccountModalOpen(open);
-          if (!open) resetAccountForm();
-        }}
-      >
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>{editingAccountId ? t('Edit Account', language) : t('Add Account', language)}</DialogTitle>
-          </DialogHeader>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Account Name', language)} *</label>
-              <input
-                type="text"
-                value={accountFormData.name || ''}
-                onChange={(e) => setAccountFormData({ ...accountFormData, name: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Account Type', language)} *</label>
-              <select
-                value={accountFormData.type}
-                onChange={(e) => {
-                  const type = e.target.value as AccountType;
-                  const typeMeta = accountTypes.find(t => t.value === type);
-                  const isCreditCard = type === 'credit-card';
-                  setAccountFormData({
-                    ...accountFormData,
-                    type,
-                    isAsset: typeMeta?.isAsset ?? accountFormData.isAsset,
-                    statementDay: isCreditCard ? (accountFormData.statementDay ?? 1) : undefined,
-                    dueDay: isCreditCard ? (accountFormData.dueDay ?? 15) : undefined,
-                    commodityName: type === 'commodities' ? (accountFormData.commodityName ?? 'Gold') : accountFormData.commodityName,
-                    commodityValuationMode: type === 'commodities' ? (accountFormData.commodityValuationMode ?? 'manual') : accountFormData.commodityValuationMode,
-                  });
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                {accountTypes.map(type => (
-                  <option key={type.value} value={type.value}>
-                    {t(type.label, language)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {accountFormData.type === 'credit-card' && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Statement Day', language)} *</label>
-                  <UnitsInput
-                    value={accountFormData.statementDay}
-                    onValueChange={(value) => setAccountFormData({ ...accountFormData, statementDay: Math.max(0, Math.round(value)) })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Due Day', language)} *</label>
-                  <UnitsInput
-                    value={accountFormData.dueDay}
-                    onValueChange={(value) => setAccountFormData({ ...accountFormData, dueDay: Math.max(0, Math.round(value)) })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                </div>
-              </>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Opening Balance', language)}</label>
-              <CurrencyInput
-                value={accountFormData.openingBalance}
-                onValueChange={(value) => setAccountFormData({ ...accountFormData, openingBalance: value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Current Balance', language)}</label>
-              <CurrencyInput
-                value={
-                  accountFormData.type === 'pension'
-                    ? pensionTotal
-                    : (accountFormData.type === 'commodities' && accountFormData.commodityValuationMode === 'auto')
-                      ? commodityPreviewValue
-                      : accountFormData.currentBalance
-                }
-                onValueChange={(value) => setAccountFormData({ ...accountFormData, currentBalance: value })}
-                disabled={accountFormData.type === 'pension' || (accountFormData.type === 'commodities' && accountFormData.commodityValuationMode === 'auto')}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            {accountFormData.type === 'pension' && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Fund Value', language)}</label>
-                  <CurrencyInput
-                    value={accountFormData.pensionFundValue}
-                    onValueChange={(value) => setAccountFormData({ ...accountFormData, pensionFundValue: value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Government Contribution', language)}</label>
-                  <CurrencyInput
-                    value={accountFormData.governmentContribution}
-                    onValueChange={(value) => setAccountFormData({ ...accountFormData, governmentContribution: value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                </div>
-              </>
-            )}
-            {accountFormData.type === 'commodities' && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Commodity', language)}</label>
-                  <input
-                    type="text"
-                    value={accountFormData.commodityName || ''}
-                    onChange={(e) => setAccountFormData({ ...accountFormData, commodityName: e.target.value })}
-                    placeholder="Gold"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Units', language)}</label>
-                  <UnitsInput
-                    value={accountFormData.commodityUnits}
-                    onValueChange={(value) => setAccountFormData({ ...accountFormData, commodityUnits: value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('Mode', language)}</label>
-                  <select
-                    value={accountFormData.commodityValuationMode ?? 'manual'}
-                    onChange={(e) => setAccountFormData({ ...accountFormData, commodityValuationMode: e.target.value as 'manual' | 'auto' })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  >
-                    <option value="manual">{t('Manual', language)}</option>
-                    <option value="auto">{t('Auto Fetch', language)}</option>
-                  </select>
-                </div>
-                <div className="md:col-span-2 text-xs text-gray-500">
-                  {t('Current Price', language)}: {formatCurrency(getCommodityMarketPrice({
-                    ...accountFormData,
-                    name: accountFormData.name || '',
-                    commodityName: accountFormData.commodityName ?? '',
-                    commodityUnits: accountFormData.commodityUnits ?? 0,
-                    commodityValuationMode: accountFormData.commodityValuationMode ?? 'manual',
-                  } as Account), state.settings.currency, locale)}
-                </div>
-              </>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Account Currency', language)}</label>
-              <input
-                type="text"
-                value={accountFormData.currency || state.settings.currency}
-                onChange={(e) => setAccountFormData({ ...accountFormData, currency: e.target.value })}
-                placeholder="TRY"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            <div className="flex items-center gap-2 mt-6">
-              <input
-                id="account-foreign"
-                type="checkbox"
-                checked={accountFormData.isForeignCurrency ?? false}
-                onChange={(e) => setAccountFormData({ ...accountFormData, isForeignCurrency: e.target.checked })}
-                className="h-4 w-4"
-              />
-              <label htmlFor="account-foreign" className="text-sm text-gray-700">{t('Foreign Currency', language)}</label>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Exchange Rate', language)}</label>
-              <UnitsInput
-                value={accountFormData.exchangeRate}
-                onValueChange={(value) => setAccountFormData({ ...accountFormData, exchangeRate: value || 1 })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Institution', language)}</label>
-              <input
-                type="text"
-                value={accountFormData.institution || ''}
-                onChange={(e) => setAccountFormData({ ...accountFormData, institution: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Owner', language)}</label>
-              <input
-                type="text"
-                value={accountFormData.owner || ''}
-                onChange={(e) => setAccountFormData({ ...accountFormData, owner: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('Notes', language)}</label>
-              <textarea
-                value={accountFormData.notes || ''}
-                onChange={(e) => setAccountFormData({ ...accountFormData, notes: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                rows={3}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <button
-              onClick={() => {
-                setIsAccountModalOpen(false);
-                resetAccountForm();
-              }}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
-              {t('Cancel', language)}
-            </button>
-            <button
-              onClick={handleSubmitAccount}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-            >
-              {editingAccountId ? t('Update Account', language) : t('Add Account', language)}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AccountEditorModal
+        isOpen={isAccountModalOpen}
+        onOpenChange={setIsAccountModalOpen}
+        editingAccountId={editingAccountId}
+        accountFormData={accountFormData}
+        setAccountFormData={setAccountFormData}
+        accountTypes={accountTypes}
+        ownerOptions={ownerOptions}
+        pensionTotal={pensionTotal}
+        commodityPreviewValue={commodityPreviewValue}
+        currency={state.settings.currency}
+        locale={locale}
+        language={language}
+        onSubmit={handleSubmitAccount}
+        onReset={resetAccountForm}
+        getCommodityMarketPrice={getCommodityMarketPrice}
+      />
     </div>
   );
 }

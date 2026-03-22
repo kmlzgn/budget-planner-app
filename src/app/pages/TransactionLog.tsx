@@ -9,6 +9,7 @@ import { formatCurrency } from '../utils/formatting';
 import { getRandomCategoryColor } from '../utils/categoryColors';
 import { calculateFundHoldings } from '../utils/fundCalculations';
 import { deriveDepositFields, getDepositStatus } from '../utils/wealthCalculations';
+import { buildFundExportRows, fundExportHeaders } from '../utils/fundExports';
 import * as XLSX from 'xlsx';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import {
@@ -20,8 +21,12 @@ import {
   DialogTitle,
 } from '../components/ui/dialog';
 import { BreadcrumbInline } from '../components/BreadcrumbInline';
-import { CurrencyInput, PercentInput, UnitsInput } from '../components/inputs/NumberInput';
+import { UnitsInput } from '../components/inputs/NumberInput';
+import { MoneyField } from '../components/inputs/MoneyField';
+import { RateField } from '../components/inputs/RateField';
 import { SmartDateInput } from '../components/inputs/SmartDateInput';
+import { AppCard } from '../components/ui/app-card';
+import { PrimaryButton, SecondaryButton } from '../components/ui/app-buttons';
 
 type ImportRow = {
   date: string;
@@ -931,17 +936,8 @@ export function TransactionLog() {
   };
 
   const exportFundsToCSV = () => {
-    const headers = ['Date', 'Fund', 'Account', 'Owner', 'Units', 'Price', 'Amount'];
-    const rows = filteredFundTransactions.map(t => [
-      t.date,
-      t.fund,
-      getAccountLabel(t.accountId),
-      t.spender || '',
-      Math.trunc(t.units),
-      t.price,
-      Math.abs(t.units * t.price),
-    ]);
-    const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const rows = buildFundExportRows(filteredFundTransactions, getAccountLabel);
+    const csv = [fundExportHeaders, ...rows].map(row => row.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -951,17 +947,8 @@ export function TransactionLog() {
   };
 
   const exportFundsToXLSX = () => {
-    const headers = ['Date', 'Fund', 'Account', 'Owner', 'Units', 'Price', 'Amount'];
-    const rows = filteredFundTransactions.map(t => [
-      t.date,
-      t.fund,
-      getAccountLabel(t.accountId),
-      t.spender || '',
-      Math.trunc(t.units),
-      t.price,
-      Math.abs(t.units * t.price),
-    ]);
-    const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const rows = buildFundExportRows(filteredFundTransactions, getAccountLabel);
+    const worksheet = XLSX.utils.aoa_to_sheet([fundExportHeaders, ...rows]);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Funds');
     XLSX.writeFile(workbook, `funds-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
@@ -1924,7 +1911,7 @@ export function TransactionLog() {
       </div>
 
       {activeTab === 'transactions' && (
-        <div className="bg-white rounded-lg shadow p-4">
+        <AppCard>
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium text-gray-700">{t('Summary Totals', language)}</div>
             <div className="text-right text-xs text-gray-500">
@@ -1954,11 +1941,11 @@ export function TransactionLog() {
               </div>
             </div>
           </div>
-        </div>
+        </AppCard>
       )}
 
       {activeTab === 'funds' && (
-        <div className="bg-white rounded-lg shadow p-4">
+        <AppCard>
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium text-gray-700">{t('Summary Totals', language)}</div>
             <div className="text-right text-xs text-gray-500">
@@ -1988,11 +1975,11 @@ export function TransactionLog() {
               </div>
             </div>
           </div>
-        </div>
+        </AppCard>
       )}
 
       {activeTab === 'deposits' && (
-        <div className="bg-white rounded-lg shadow p-4">
+        <AppCard>
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium text-gray-700">{t('Summary Totals', language)}</div>
             <div className="text-right text-xs text-gray-500">
@@ -2022,13 +2009,13 @@ export function TransactionLog() {
               </div>
             </div>
           </div>
-        </div>
+        </AppCard>
       )}
 
       {activeTab === 'transactions' && (
         <>
           {/* Add/Edit Form */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <AppCard>
             <Accordion
               type="single"
               collapsible
@@ -2083,9 +2070,10 @@ export function TransactionLog() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     {t('Amount', language)} * ({formFx.currency})
                   </label>
-                  <CurrencyInput
+                  <MoneyField
                     value={formData.amount || 0}
                     onValueChange={(value) => setFormData({ ...formData, amount: value })}
+                    locale={locale}
                     placeholder="0.00"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                   />
@@ -2157,27 +2145,21 @@ export function TransactionLog() {
               </div>
 
               <div className="flex gap-2 mt-4">
-                <button
-                  onClick={handleSubmit}
-                  className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
-                >
+                <PrimaryButton onClick={handleSubmit}>
                   <Plus className="w-4 h-4" />
                   {t('Add Transaction', language)}
-                </button>
-                <button
-                  onClick={resetForm}
-                  className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                >
+                </PrimaryButton>
+                <SecondaryButton onClick={resetForm}>
                   {t('Clear', language)}
-                </button>
+                </SecondaryButton>
               </div>
             </AccordionContent>
           </AccordionItem>
             </Accordion>
-          </div>
+          </AppCard>
 
           {/* Filters and Export */}
-          <div className="bg-white rounded-lg shadow p-4">
+          <AppCard>
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-gray-600" />
@@ -2333,25 +2315,19 @@ export function TransactionLog() {
             className="hidden"
             onChange={handleImportChange}
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2 text-sm"
-          >
+          <PrimaryButton onClick={() => fileInputRef.current?.click()} size="sm">
             <Upload className="w-4 h-4" />
             {t('Import Excel', language)}
-          </button>
-          <button
-            onClick={exportToCSV}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm"
-          >
+          </PrimaryButton>
+          <SecondaryButton onClick={exportToCSV} size="sm">
             <Download className="w-4 h-4" />
             {t('Export CSV', language)}
-          </button>
-        </div>
+          </SecondaryButton>
       </div>
+        </AppCard>
 
       {/* Transactions List */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+      <AppCard className="p-0 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
@@ -2652,7 +2628,7 @@ export function TransactionLog() {
             </select>
           </div>
         </div>
-      </div>
+      </AppCard>
 
       <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
         <DialogContent className="max-w-6xl w-full max-h-[75vh] overflow-hidden">
@@ -2838,19 +2814,15 @@ export function TransactionLog() {
           </div>
 
           <DialogFooter className="gap-2 sm:justify-end">
-            <button
-              onClick={() => setIsImportOpen(false)}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-            >
+            <SecondaryButton onClick={() => setIsImportOpen(false)}>
               {t('Cancel', language)}
-            </button>
-            <button
+            </SecondaryButton>
+            <PrimaryButton
               onClick={applyImport}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
               disabled={importRows.length === 0 && selectedDuplicateKeys.size === 0}
             >
               {t('Apply Import', language)}
-            </button>
+            </PrimaryButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2859,7 +2831,7 @@ export function TransactionLog() {
 
       {activeTab === 'funds' && (
         <>
-          <div className="bg-white rounded-lg shadow p-6">
+          <AppCard>
             <Accordion type="single" collapsible>
               <AccordionItem value="add-fund-transaction" className="border-none">
                 <AccordionTrigger className="py-0">
@@ -2949,13 +2921,10 @@ export function TransactionLog() {
                     </div>
                   </div>
                   <div className="flex gap-2 mt-4">
-                    <button
-                      onClick={handleFundSubmit}
-                      className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
-                    >
+                    <PrimaryButton onClick={handleFundSubmit}>
                       <Plus className="w-4 h-4" />
                       {t('Add Fund Transaction', language)}
-                    </button>
+                    </PrimaryButton>
                   </div>
                   {fundFormError && (
                     <div className="mt-2 text-sm text-red-600">{fundFormError}</div>
@@ -2963,10 +2932,10 @@ export function TransactionLog() {
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
-          </div>
+          </AppCard>
 
           
-          <div className="bg-white rounded-lg shadow p-4">
+          <AppCard>
             <div className="flex items-center gap-4 flex-wrap">
               <div className="flex items-center gap-2">
                 <Filter className="w-4 h-4 text-gray-600" />
@@ -3087,35 +3056,26 @@ export function TransactionLog() {
                 className="hidden"
                 onChange={handleFundImportChange}
               />
-              <button
-                onClick={() => fundFileInputRef.current?.click()}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2 text-sm"
-              >
+              <PrimaryButton onClick={() => fundFileInputRef.current?.click()} size="sm">
                 <Upload className="w-4 h-4" />
                 {t('Import Funds', language)}
-              </button>
-              <button
-                onClick={exportFundsToCSV}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm"
-              >
+              </PrimaryButton>
+              <SecondaryButton onClick={exportFundsToCSV} size="sm">
                 <Download className="w-4 h-4" />
                 {t('Export CSV', language)}
-              </button>
-              <button
-                onClick={exportFundsToXLSX}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm"
-              >
+              </SecondaryButton>
+              <SecondaryButton onClick={exportFundsToXLSX} size="sm">
                 <Download className="w-4 h-4" />
                 {t('Export XLSX', language)}
-              </button>
+              </SecondaryButton>
             </div>
-          </div>
+          </AppCard>
 
           {fundEditError && (
             <div className="text-sm text-red-600">{fundEditError}</div>
           )}
 
-          <div className="bg-white rounded-lg shadow overflow-hidden">
+          <AppCard className="p-0 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
@@ -3353,7 +3313,7 @@ export function TransactionLog() {
                 </select>
               </div>
             </div>
-          </div>
+          </AppCard>
           
 
           <Dialog open={isFundImportOpen} onOpenChange={setIsFundImportOpen}>
@@ -3502,19 +3462,12 @@ export function TransactionLog() {
               </div>
 
               <DialogFooter className="gap-2 sm:justify-end">
-                <button
-                  onClick={() => setIsFundImportOpen(false)}
-                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                >
+                <SecondaryButton onClick={() => setIsFundImportOpen(false)}>
                   {t('Cancel', language)}
-                </button>
-                <button
-                  onClick={applyFundImport}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-                  disabled={fundImportRows.length === 0}
-                >
+                </SecondaryButton>
+                <PrimaryButton onClick={applyFundImport} disabled={fundImportRows.length === 0}>
                   {t('Apply Import', language)}
-                </button>
+                </PrimaryButton>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -3523,7 +3476,7 @@ export function TransactionLog() {
 
       {activeTab === 'deposits' && (
         <>
-          <div className="bg-white rounded-lg shadow p-6">
+          <AppCard>
             <Accordion type="single" collapsible>
               <AccordionItem value="add-deposit" className="border-none">
                 <AccordionTrigger className="py-0">
@@ -3551,9 +3504,10 @@ export function TransactionLog() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Principal', language)} *</label>
-                      <CurrencyInput
+                      <MoneyField
                         value={depositFormData.principal}
                         onValueChange={(value) => setDepositFormData({ ...depositFormData, principal: value })}
+                        locale={locale}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
@@ -3567,17 +3521,19 @@ export function TransactionLog() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Gross Rate %', language)}</label>
-                      <PercentInput
+                      <RateField
                         value={depositFormData.grossRate}
                         onValueChange={(value) => setDepositFormData({ ...depositFormData, grossRate: value })}
+                        locale={locale}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('Stopaj %', language)}</label>
-                      <PercentInput
+                      <RateField
                         value={depositFormData.withholdingTaxRate}
                         onValueChange={(value) => setDepositFormData({ ...depositFormData, withholdingTaxRate: value })}
+                        locale={locale}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                       />
                     </div>
@@ -3624,26 +3580,20 @@ export function TransactionLog() {
                   </div>
 
                   <div className="flex gap-2 mt-4">
-                    <button
-                      onClick={handleDepositSubmit}
-                      className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
-                    >
+                    <PrimaryButton onClick={handleDepositSubmit}>
                       <Plus className="w-4 h-4" />
                       {depositEditingId ? t('Update Deposit', language) : t('Add Deposit', language)}
-                    </button>
-                    <button
-                      onClick={resetDepositForm}
-                      className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                    >
+                    </PrimaryButton>
+                    <SecondaryButton onClick={resetDepositForm}>
                       {t('Clear', language)}
-                    </button>
+                    </SecondaryButton>
                   </div>
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
-          </div>
+          </AppCard>
 
-          <div className="bg-white rounded-lg shadow p-4">
+          <AppCard>
             <div className="flex items-center gap-4 flex-wrap">
               <div className="flex items-center gap-2">
                 <Filter className="w-4 h-4 text-gray-600" />
@@ -3684,31 +3634,22 @@ export function TransactionLog() {
                 onChange={handleDepositImportChange}
                 className="hidden"
               />
-              <button
-                onClick={() => depositFileInputRef.current?.click()}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2 text-sm"
-              >
+              <PrimaryButton onClick={() => depositFileInputRef.current?.click()} size="sm">
                 <Upload className="w-4 h-4" />
                 {t('Import Deposits', language)}
-              </button>
-              <button
-                onClick={exportDepositsToCSV}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm"
-              >
+              </PrimaryButton>
+              <SecondaryButton onClick={exportDepositsToCSV} size="sm">
                 <Download className="w-4 h-4" />
                 {t('Export CSV', language)}
-              </button>
-              <button
-                onClick={exportDepositsToXLSX}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm"
-              >
+              </SecondaryButton>
+              <SecondaryButton onClick={exportDepositsToXLSX} size="sm">
                 <Download className="w-4 h-4" />
                 {t('Export XLSX', language)}
-              </button>
+              </SecondaryButton>
             </div>
-          </div>
+          </AppCard>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <AppCard>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
@@ -3815,7 +3756,7 @@ export function TransactionLog() {
                 </tbody>
               </table>
             </div>
-          </div>
+          </AppCard>
 
           <Dialog open={isDepositImportOpen} onOpenChange={setIsDepositImportOpen}>
             <DialogContent className="max-w-5xl">
@@ -3884,19 +3825,12 @@ export function TransactionLog() {
               </div>
 
               <DialogFooter className="gap-2 sm:justify-end">
-                <button
-                  onClick={() => setIsDepositImportOpen(false)}
-                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                >
+                <SecondaryButton onClick={() => setIsDepositImportOpen(false)}>
                   {t('Cancel', language)}
-                </button>
-                <button
-                  onClick={applyDepositImport}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-                  disabled={depositImportRows.length === 0}
-                >
+                </SecondaryButton>
+                <PrimaryButton onClick={applyDepositImport} disabled={depositImportRows.length === 0}>
                   {t('Apply Import', language)}
-                </button>
+                </PrimaryButton>
               </DialogFooter>
             </DialogContent>
           </Dialog>

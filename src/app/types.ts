@@ -100,6 +100,7 @@ export interface Account {
   name: string;
   type: AccountType;
   openingBalance: number;
+  /** @deprecated Prefer derived selectors; stored for backward compatibility. */
   currentBalance: number;
   isAsset: boolean;
   currency?: string;

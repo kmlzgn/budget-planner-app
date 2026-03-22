@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router';
 import { useBudget } from '../context/BudgetContext';
-import { t } from '../utils/i18n';
+import { tKey, TranslationKey } from '../utils/i18n';
 import {
   AccountBalanceWallet as AccountBalanceWalletIcon,
   BarChart as BarChartIcon,
@@ -26,7 +26,7 @@ import {
   useSidebar,
 } from './ui/sidebar';
 
-const primaryNavItems = [
+const primaryNavItems: Array<{ path: string; label: TranslationKey; icon: typeof BarChartIcon }> = [
   { path: '/overview', label: 'Overview', icon: BarChartIcon },
   { path: '/cash-flow', label: 'Cash Flow', icon: CalendarMonthIcon },
   { path: '/net-worth', label: 'Net Worth', icon: AccountBalanceWalletIcon },
@@ -36,7 +36,7 @@ const primaryNavItems = [
   { path: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
-const secondaryNavItems = [
+const secondaryNavItems: Array<{ path: string; label: TranslationKey; icon: typeof HelpOutlineIcon }> = [
   { path: '/tools/instructions', label: 'Instructions', icon: HelpOutlineIcon },
   { path: '/tools/transactions', label: 'Transaction Log', icon: ReceiptLongIcon },
   { path: '/tools/recurring', label: 'Recurring Transactions', icon: RepeatIcon },
@@ -59,7 +59,7 @@ export function Navigation() {
     '/tools/instructions': '/tools/instructions',
     '/tools/transactions': '/tools/transactions',
     '/tools/recurring': '/tools/recurring',
-    '/': '/tools/instructions',
+    '/': '/overview',
     '/transactions': '/tools/transactions',
     '/recurring': '/tools/recurring',
   };
@@ -74,7 +74,7 @@ export function Navigation() {
             <span
               className={`text-sm font-semibold ${sidebarState === 'collapsed' ? 'hidden' : ''}`}
             >
-              {t('Budget Planner 2026', language)}
+              {tKey('Budget Planner 2026', language)}
             </span>
           </div>
           <Button
@@ -91,7 +91,7 @@ export function Navigation() {
       <SidebarContent className="overflow-x-hidden">
         <SidebarMenu>
           <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            {t('Core', language)}
+            {tKey('Core', language)}
           </div>
           {primaryNavItems.map((item) => {
             const Icon = item.icon;
@@ -101,18 +101,18 @@ export function Navigation() {
                 <SidebarMenuButton
                   asChild
                   isActive={isActive}
-                  tooltip={t(item.label, language)}
+                  tooltip={tKey(item.label, language)}
                 >
                   <Link to={item.path}>
                     <Icon className="h-4 w-4" />
-                    <span>{t(item.label, language)}</span>
+                    <span>{tKey(item.label, language)}</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             );
           })}
           <div className="px-3 pt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            {t('Tools', language)}
+            {tKey('Tools', language)}
           </div>
           {secondaryNavItems.map((item) => {
             const Icon = item.icon;
@@ -122,11 +122,11 @@ export function Navigation() {
                 <SidebarMenuButton
                   asChild
                   isActive={isActive}
-                  tooltip={t(item.label, language)}
+                  tooltip={tKey(item.label, language)}
                 >
                   <Link to={item.path}>
                     <Icon className="h-4 w-4" />
-                    <span>{t(item.label, language)}</span>
+                    <span>{tKey(item.label, language)}</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

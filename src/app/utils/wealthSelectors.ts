@@ -1,5 +1,6 @@
 import { Account, AccountType, BudgetState, CommodityPrice, Deposit, FxRate } from '../types';
-import { calculateAccountBalancesFromTransactions, calculateNetWorth } from './budgetCalculations';
+import { normalizeCommodityPriceFromState } from './marketData';
+import { getDerivedAccountBalances } from './accountBalanceSelectors';
 import { calculateFundHoldings, FundHolding } from './fundCalculations';
 import { getDepositExpectedValue, getDepositStatus, getDaysUntil } from './wealthCalculations';
 
@@ -64,7 +65,7 @@ export type WealthTotals = {
 };
 
 export const getWealthTotals = (state: BudgetState, today: Date): WealthTotals => {
-  const accountBalances = calculateAccountBalancesFromTransactions(state.accounts, state.transactions, today);
+  const accountBalances = getDerivedAccountBalances(state, today);
   const getMarketFxRate = (currency: string) => {
     if (!currency || currency === state.settings.currency) return 1;
     const normalizePair = (pair: string) => pair.replace(/\s+/g, '').toUpperCase();
@@ -86,23 +87,8 @@ export const getWealthTotals = (state: BudgetState, today: Date): WealthTotals =
     }
     return value;
   };
-  const getCommodityPrice = (account: Account) => {
-    const fallbackName = normalizeName(account.name).includes('gold') || normalizeName(account.name).includes('altin')
-      ? 'Gold'
-      : account.commodityName;
-    if (!fallbackName) return 0;
-    const match = state.marketData.commodities.find(item => normalizeName(item.commodity) === normalizeName(fallbackName));
-    return match?.price ?? 0;
-  };
   const getAccountValue = (account: Account) => {
-    if (account.type === 'commodities' && account.commodityValuationMode === 'auto') {
-      const units = account.commodityUnits ?? 0;
-      const price = getCommodityPrice(account);
-      return units * price;
-    }
-    const localValue = account.type === 'pension'
-      ? (account.pensionFundValue ?? 0) + (account.governmentContribution ?? 0)
-      : (accountBalances.get(account.id) ?? account.currentBalance);
+    const localValue = accountBalances.get(account.id) ?? account.openingBalance ?? 0;
     return toBase(localValue, account);
   };
   const fundHoldings = calculateFundHoldings(state.fundTransactions, state.fundHoldingsMeta)
@@ -157,7 +143,7 @@ export const getWealthTotals = (state: BudgetState, today: Date): WealthTotals =
     .reduce((sum, a) => sum + getAccountValue(a), 0);
   const totalAssets = cashTotal + fundAssetsTotal + depositsTotal + goldTotal + blockedAssetsTotal + otherAssetsTotal;
   const totalLiabilities = liabilityAccounts
-    .reduce((sum, a) => sum + Math.abs(toBase(accountBalances.get(a.id) ?? a.currentBalance, a)), 0) + debtTotal;
+    .reduce((sum, a) => sum + Math.abs(toBase(accountBalances.get(a.id) ?? a.openingBalance ?? 0, a)), 0) + debtTotal;
   const netWorth = totalAssets - totalLiabilities;
 
   return {
@@ -242,7 +228,8 @@ export const buildWealthBreakdown = (
       : account.commodityName;
     if (!fallbackName) return 0;
     const match = commodities.find(item => normalizeName(item.commodity) === normalizeName(fallbackName));
-    return match?.price ?? 0;
+    const normalized = normalizeCommodityPriceFromState(match, baseCurrency, getMarketFxRate);
+    return normalized.price ?? 0;
   };
   const getAccountValue = (account: Account) => {
     if (account.type === 'commodities' && account.commodityValuationMode === 'auto') {
@@ -250,9 +237,7 @@ export const buildWealthBreakdown = (
       const price = getCommodityPrice(account);
       return units * price;
     }
-    const localValue = account.type === 'pension'
-      ? (account.pensionFundValue ?? 0) + (account.governmentContribution ?? 0)
-      : (accountBalances.get(account.id) ?? account.currentBalance);
+    const localValue = accountBalances.get(account.id) ?? account.openingBalance ?? 0;
     return toBase(localValue, account);
   };
   const rows = new Map<string, BreakdownRow>();

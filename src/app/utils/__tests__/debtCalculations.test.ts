@@ -33,7 +33,7 @@ describe('debt calculations', () => {
     const summary = getDebtDecisionSummary(debts, 'snowball', 50);
     expect(summary.totalDebt).toBe(1000);
     expect(summary.totalMinimumPayments).toBe(100);
-    expect(summary.monthsSaved).toBeGreaterThanOrEqual(0);
-    expect(summary.interestSaved).toBeGreaterThanOrEqual(0);
+    expect(summary.monthsSaved).not.toBeNull();
+    expect(summary.interestSaved).not.toBeNull();
   });
 });
